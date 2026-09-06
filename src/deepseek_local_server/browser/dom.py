@@ -34,6 +34,12 @@ STOP_SELECTORS: list[str] = []
 # The "expert" mode toggle. State lives in aria-pressed on this same element.
 DEEPTHINK_TOGGLE_SELECTOR = 'div.ds-toggle-button:has(span:text-is("DeepThink"))'
 
+# Top-bar model picker options ("Instant" = fast, "Expert" = strong reasoning model).
+# The picker has no stable attributes (hashed classes only), so the option is matched by
+# exact text. Labels are localized (ru: "Эксперт"); the browser is launched with locale
+# en-US, but both variants are kept in case the site overrides it.
+EXPERT_MODEL_TEXTS = ("Expert", "\u042d\u043a\u0441\u043f\u0435\u0440\u0442")
+
 SNAPSHOT_MESSAGES_JS = r"""
 (args) => {
   const { selectors } = args;

@@ -18,6 +18,7 @@ from deepseek_local_server.browser.dom import (
     ASSISTANT_SELECTORS,
     COMPOSER_SELECTORS,
     DEEPTHINK_TOGGLE_SELECTOR,
+    EXPERT_MODEL_TEXTS,
     NEW_CHAT_SELECTORS,
     PAGE_ERROR_JS,
     SEND_SELECTORS,
@@ -102,6 +103,7 @@ class DeepSeekBrowserWorker:
                 except PlaywrightTimeoutError:
                     pass
                 await self._try_start_new_chat(page)
+            await self._ensure_expert(page)
             await self._ensure_deepthink(page)
             composer = await self._find_composer(page, timeout_ms=20_000)
             self._progress(progress, "composer_ready")
@@ -161,6 +163,23 @@ class DeepSeekBrowserWorker:
                     return
             except Exception:
                 continue
+
+    async def _ensure_expert(self, page: Page) -> None:
+        # The top-bar model picker (Instant / Expert) decides which model answers; the
+        # DeepThink toggle alone does not switch models. Selecting Expert is idempotent,
+        # so no state pre-check is needed.
+        try:
+            for label in EXPERT_MODEL_TEXTS:
+                option = page.get_by_text(label, exact=True).first
+                if await option.count():
+                    await option.click(timeout=3_000)
+                    await asyncio.sleep(0.3)
+                    LOGGER.info("Expert model selected (%s)", label)
+                    return
+            LOGGER.info("Expert model option not found in the model picker")
+        except Exception:
+            # Model preference, not a hard requirement; never break the send flow over it.
+            LOGGER.info("could not select Expert model", exc_info=True)
 
     async def _ensure_deepthink(self, page: Page) -> None:
         if not self._settings.deepthink_enabled:

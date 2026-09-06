@@ -1,0 +1,26 @@
+3
+8
+8
+3
+	​
+
+ because there are 
+(
+3
+2
+)
+=
+3
+(
+2
+3
+	​
+
+)=3 favorable outcomes out of 
+2
+3
+=
+8
+2
+3
+=8 total outcomes.

@@ -1,7 +1,7 @@
 # deepseek-local-server
 
 OpenAI-compatible local server backed by **chat.deepseek.com** through Playwright (Chromium),
-with **DeepThink (R1 reasoning / "expert") mode enabled by default**.
+with the **Expert model** and the **DeepThink (reasoning) toggle** enabled by default.
 
 It drives the real DeepSeek Web UI in a persistent browser profile: you log in once, then any
 OpenAI-compatible client (or the bundled MCP tool) can send chat requests and get DeepThink
@@ -19,7 +19,7 @@ deepseek-local-server serve   ← FastAPI on 127.0.0.1:9874
         │  serializes requests through a single browser worker
         ▼
 Chromium (persistent profile, chat.deepseek.com)
-        │  opens composer → enables DeepThink toggle → sends → polls until the
+        │  selects Expert model → enables DeepThink toggle → sends → polls until the
         │  answer is stable (stable_seconds) → extracts text
         ▼
 Answer returned as a standard OpenAI chat completion
@@ -33,8 +33,10 @@ Key points:
   `%LOCALAPPDATA%\deepseek-local-server\browser-profile` (Windows) — the same directory
   Chromium uses, so **only one process may use it at a time**. If an `auth` window is still
   open, `serve` cannot launch its own Chromium ("profile is already in use").
-- **DeepThink is on by default** (`DEEPSEEK_LOCAL_SERVER_DEEPTHINK=1`). Reasoning answers can
-  take minutes — the default request timeout is 300 s.
+- **Expert model + DeepThink are on by default.** Before every send the worker selects the
+  "Expert" option in the top-bar model picker (Instant/Expert) and turns the DeepThink toggle
+  on (`DEEPSEEK_LOCAL_SERVER_DEEPTHINK=1`). Reasoning answers can take minutes — the default
+  request timeout is 300 s.
 - The server **only listens on loopback** and requires the local bearer token from `init`.
 
 ## Setup (one-time)
@@ -150,7 +152,7 @@ All optional; defaults in parentheses.
 | `DEEPSEEK_LOCAL_SERVER_POLL_INTERVAL_SECONDS` | `0.35` | Poll interval |
 | `DEEPSEEK_LOCAL_SERVER_MAX_PROMPT_CHARS` | `900000` | Prompt size cap |
 | `DEEPSEEK_LOCAL_SERVER_MODEL_ID` | `deepseek-web` | Model id exposed via the API |
-| `DEEPSEEK_LOCAL_SERVER_DEEPTHINK` | `1` | DeepThink (expert/reasoning) toggle |
+| `DEEPSEEK_LOCAL_SERVER_DEEPTHINK` | `1` | DeepThink (reasoning) toggle; Expert model is always selected |
 | `DEEPSEEK_LOCAL_SERVER_BLOCK_HEAVY_RESOURCES` | `1` | Block heavy page resources for speed |
 
 ## Troubleshooting

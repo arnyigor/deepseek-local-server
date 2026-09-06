@@ -126,6 +126,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    # Windows consoles default to cp866/cp1251 and crash on characters DeepSeek answers
+    # routinely contain (zero-width spaces, CJK). Never let a pretty answer kill the CLI.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     args = build_parser().parse_args(argv)
     settings = _settings()
     if args.command == "init":

@@ -1,0 +1,5 @@
+Поиск песни  ||  _77cdc67 _8a693f3 | _3098d02 | _546d736 | c08e6e93 | 
+Модель и дата знаний  ||  _77cdc67 _8a693f3 | _3098d02 | _546d736 | c08e6e93 | 
+Эксперт  ||  b0db7355 | _9f2341b _18572c1 | dfb78875 | _321831d | 
+Глубокое мышление  ||  ec4f5d61 | _58b31c9 | f79352dc ds-toggle-button ds-toggle-button--m ds-toggle-button--selected | _6dbc175 | 
+Умный поиск  ||  ec4f5d61 | _58b31c9 | f79352dc ds-toggle-button ds-toggle-button--m ds-toggle-button--selected | _6dbc175 | 

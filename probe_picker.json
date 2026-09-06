@@ -1,0 +1,86 @@
+{
+  "candidates": [
+    {
+      "text": "Instant",
+      "chain": [
+        {
+          "tag": "SPAN",
+          "cls": "_321831d",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "dfb78875",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "_9f2341b _18572c1 _31a22b0",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "b0db7355",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "e362e944",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "_9a2f8e4",
+          "role": "",
+          "ariaHasPopup": ""
+        }
+      ]
+    },
+    {
+      "text": "Expert",
+      "chain": [
+        {
+          "tag": "SPAN",
+          "cls": "_321831d",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "dfb78875",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "_9f2341b _18572c1",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "b0db7355",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "e362e944",
+          "role": "",
+          "ariaHasPopup": ""
+        },
+        {
+          "tag": "DIV",
+          "cls": "_9a2f8e4",
+          "role": "",
+          "ariaHasPopup": ""
+        }
+      ]
+    }
+  ]
+}
