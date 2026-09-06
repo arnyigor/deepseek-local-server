@@ -43,10 +43,12 @@ Key points:
 
 ```powershell
 # Windows PowerShell (note: PS 5.1 has no `&&` — use `;` or separate lines)
-cd G:/Android/OpenideProjects/deepseek-local-server
+cd <path-to-repo>
 pip install -e .[dev]
 python -m playwright install chromium
 ```
+
+Linux/macOS use `./.venv/bin/deepseek-local-server` instead of `./.venv/Scripts/deepseek-local-server.exe`.
 
 ## Usage
 
@@ -137,9 +139,9 @@ Pi (`~/.pi/agent/mcp.json`):
 
 ```json
 "deepseek-web": {
-  "command": "G:/Android/OpenideProjects/deepseek-local-server/.venv/Scripts/python.exe",
+  "command": "<path-to-repo>/.venv/Scripts/python.exe",
   "args": ["-m", "deepseek_local_server", "mcp"],
-  "cwd": "G:/Android/OpenideProjects/deepseek-local-server",
+  "cwd": "<path-to-repo>",
   "lifecycle": "keep-alive",
   "directTools": true,
   "requestTimeoutMs": 600000
@@ -151,7 +153,7 @@ Claude Code / Desktop (`~/.claude.json` or `.mcp.json`):
 ```json
 "deepseek-web": {
   "type": "stdio",
-  "command": "G:/Android/OpenideProjects/deepseek-local-server/.venv/Scripts/deepseek-local-server.exe",
+  "command": "<path-to-repo>/.venv/Scripts/deepseek-local-server.exe",
   "args": ["mcp"]
 }
 ```
@@ -161,7 +163,7 @@ After editing the MCP config, restart the agent so it picks up the change.
 ## Tests
 
 ```powershell
-./.venv/Scripts/py.test.exe -q     # 13 tests
+./.venv/Scripts/py.test.exe -q     # 26 tests
 ```
 
 ## Configuration (environment variables)
@@ -206,5 +208,5 @@ src/deepseek_local_server/
   api/              # FastAPI app: /health, /v1/models, /v1/chat/completions
   openai/           # OpenAI schema/content helpers
   mcp_server.py     # ask_deepseek stdio MCP wrapper
-tests/              # 13 unit tests (config, dom, content, tool protocol, browser manager)
+tests/              # 26 unit tests (config, dom, content, chat mode, tool protocol, MCP server, browser manager)
 ```
