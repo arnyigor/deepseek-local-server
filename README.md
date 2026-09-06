@@ -102,8 +102,24 @@ Any OpenAI SDK works with `base_url="http://127.0.0.1:9874/v1"` and `api_key=<to
 ### MCP tool (`ask_deepseek`)
 
 Runs the same endpoint as a thin stdio MCP wrapper (server name `deepseek-web`,
-single tool `ask_deepseek(question, timeout_seconds)`). It does **not** start `serve`
+single tool `ask_deepseek(question, timeout_seconds, new_conversation=False)`). It does **not** start `serve`
 itself — keep `serve` running separately.
+
+Calls continue the current conversation by default. The MCP process keeps successful
+questions and answers in memory and sends the history so the backend can reuse the
+active browser chat. Set `new_conversation: true` to clear history and start a new chat:
+
+```json
+{"question": "Remember the code BLUE-CAT-42", "new_conversation": true}
+{"question": "What code did I give you?"}
+{"question": "Start a different topic", "new_conversation": true}
+```
+
+Keep the MCP process alive between calls (Pi: `lifecycle: "keep-alive"`). Restarting
+or reconnecting the process clears its history. Concurrent calls are serialized;
+failed calls are not added to history. An explicit reset clears history even if its
+request fails. The backend has one active browser chat: if another API/MCP client
+replaces it, the next call restores the conversation from history in a new browser chat.
 
 Pi (`~/.pi/agent/mcp.json`):
 
