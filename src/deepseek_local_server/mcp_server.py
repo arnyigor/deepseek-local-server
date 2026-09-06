@@ -7,6 +7,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from deepseek_local_server.auth import read_api_token
 from deepseek_local_server.config import Settings
+from deepseek_local_server.openai.schemas import ChatMode
 
 _settings = Settings.from_env()
 
@@ -27,7 +28,8 @@ server = MCPServer(
         "the question. Good for a second opinion, brainstorming, or explaining something; "
         "not for multi-step agentic work. DeepThink answers can take a few minutes -- don't "
         "lower timeout_seconds below the default. Calls continue the current conversation; "
-        "set new_conversation=true to start a fresh chat."
+        "set new_conversation=true to start a fresh chat. Set mode='instant' for a fast "
+        "answer without enabling Expert or DeepThink; mode defaults to 'expert' on each call."
     ),
 )
 
@@ -38,8 +40,9 @@ async def ask_deepseek(
     ctx: Context,
     timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     new_conversation: bool = False,
+    mode: ChatMode = "expert",
 ) -> str:
-    """Ask DeepSeek Web (DeepThink) a plain-text question and return its answer.
+    """Ask DeepSeek Web a plain-text question and return its answer.
 
     Calls remember earlier questions and answers in this MCP process. Set
     `new_conversation=True` to discard that history and start a new chat. Reconnecting
@@ -47,14 +50,19 @@ async def ask_deepseek(
     commands, so paste any relevant code or context directly into the question. Replies
     can take a few minutes with DeepThink (reasoning mode) enabled -- the default timeout
     already accounts for that.
+
+    `mode="instant"` selects Instant without enabling DeepThink. The default is
+    `mode="expert"` on every call; repeat `mode="instant"` on Instant follow-ups.
     """
     async with _conversation_lock:
         if new_conversation:
             _history.clear()
-        return await _ask_in_conversation(question, ctx, timeout_seconds)
+        return await _ask_in_conversation(question, ctx, timeout_seconds, mode)
 
 
-async def _ask_in_conversation(question: str, ctx: Context, timeout_seconds: float) -> str:
+async def _ask_in_conversation(
+    question: str, ctx: Context, timeout_seconds: float, mode: ChatMode,
+) -> str:
     try:
         token = read_api_token(_settings)
     except (FileNotFoundError, RuntimeError) as exc:
@@ -70,6 +78,7 @@ async def _ask_in_conversation(question: str, ctx: Context, timeout_seconds: flo
                 headers={"Authorization": f"Bearer {token}"},
                 json={
                     "model": _settings.model_id,
+                    "mode": mode,
                     "messages": messages,
                     "stream": False,
                 },

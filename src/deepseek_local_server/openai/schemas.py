@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+ChatMode = Literal["expert", "instant"]
+
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
@@ -40,6 +42,7 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     model: str
+    mode: ChatMode = "expert"
     messages: list[ChatMessage] = Field(min_length=1)
     tools: list[ToolDefinition] | None = None
     tool_choice: Any = None

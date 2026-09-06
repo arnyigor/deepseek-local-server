@@ -39,6 +39,7 @@ DEEPTHINK_TOGGLE_SELECTOR = 'div.ds-toggle-button:has(span:text-is("DeepThink"))
 # exact text. Labels are localized (ru: "Эксперт"); the browser is launched with locale
 # en-US, but both variants are kept in case the site overrides it.
 EXPERT_MODEL_TEXTS = ("Expert", "\u042d\u043a\u0441\u043f\u0435\u0440\u0442")
+INSTANT_MODEL_TEXTS = ("Instant",)
 
 SNAPSHOT_MESSAGES_JS = r"""
 (args) => {

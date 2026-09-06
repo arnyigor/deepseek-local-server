@@ -19,6 +19,7 @@ from deepseek_local_server.browser.dom import (
     COMPOSER_SELECTORS,
     DEEPTHINK_TOGGLE_SELECTOR,
     EXPERT_MODEL_TEXTS,
+    INSTANT_MODEL_TEXTS,
     NEW_CHAT_SELECTORS,
     PAGE_ERROR_JS,
     SEND_SELECTORS,
@@ -31,6 +32,7 @@ from deepseek_local_server.browser.dom import (
 from deepseek_local_server.browser.manager import BrowserManager
 from deepseek_local_server.config import Settings
 from deepseek_local_server.errors import AuthenticationRequiredError, BrowserProtocolError, DeepSeekPageError
+from deepseek_local_server.openai.schemas import ChatMode
 
 LOGGER = logging.getLogger("deepseek_local_server.browser")
 ProgressCallback = Callable[[str], None]
@@ -85,6 +87,7 @@ class DeepSeekBrowserWorker:
         progress: ProgressCallback | None = None,
         page: Page | None = None,
         keep_open: bool = False,
+        mode: ChatMode = "expert",
     ) -> tuple[BrowserResult, Page]:
         reuse = page is not None
         if not reuse:
@@ -103,8 +106,9 @@ class DeepSeekBrowserWorker:
                 except PlaywrightTimeoutError:
                     pass
                 await self._try_start_new_chat(page)
-            await self._ensure_expert(page)
-            await self._ensure_deepthink(page)
+            await self._ensure_model(page, mode)
+            if mode == "expert":
+                await self._ensure_deepthink(page)
             composer = await self._find_composer(page, timeout_ms=20_000)
             self._progress(progress, "composer_ready")
 
@@ -164,20 +168,25 @@ class DeepSeekBrowserWorker:
             except Exception:
                 continue
 
-    async def _ensure_expert(self, page: Page) -> None:
+    async def _ensure_model(self, page: Page, mode: ChatMode) -> None:
         # The top-bar model picker (Instant / Expert) decides which model answers; the
-        # DeepThink toggle alone does not switch models. Selecting Expert is idempotent,
+        # DeepThink toggle alone does not switch models. Selecting an option is idempotent,
         # so no state pre-check is needed.
         try:
-            for label in EXPERT_MODEL_TEXTS:
+            labels = INSTANT_MODEL_TEXTS if mode == "instant" else EXPERT_MODEL_TEXTS
+            for label in labels:
                 option = page.get_by_text(label, exact=True).first
-                if await option.count():
+                if await option.count() and await option.is_visible():
                     await option.click(timeout=3_000)
                     await asyncio.sleep(0.3)
-                    LOGGER.info("Expert model selected (%s)", label)
+                    LOGGER.info("%s model selected (%s)", mode, label)
                     return
+            if mode == "instant":
+                raise BrowserProtocolError("Instant model option not found in the model picker")
             LOGGER.info("Expert model option not found in the model picker")
-        except Exception:
+        except Exception as exc:
+            if mode == "instant":
+                raise BrowserProtocolError("Could not select Instant model") from exc
             # Model preference, not a hard requirement; never break the send flow over it.
             LOGGER.info("could not select Expert model", exc_info=True)
 

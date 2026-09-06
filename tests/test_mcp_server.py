@@ -114,6 +114,20 @@ def test_concurrent_calls_preserve_order(bridge):
     ]
 
 
+def test_mode_is_forwarded_per_call_without_resetting_history(bridge):
+    requests, replies, ctx = bridge
+    replies.extend(["fast", "detailed"])
+
+    async def run():
+        await mcp_server.ask_deepseek("first", ctx, mode="instant")
+        await mcp_server.ask_deepseek("continue", ctx)
+
+    asyncio.run(run())
+    assert requests[0]["mode"] == "instant"
+    assert requests[1]["mode"] == "expert"
+    assert len(requests[1]["messages"]) == 3
+
+
 def test_cancellation_stops_request_without_updating_history(monkeypatch):
     started = asyncio.Event()
     stopped = asyncio.Event()

@@ -102,7 +102,7 @@ Any OpenAI SDK works with `base_url="http://127.0.0.1:9874/v1"` and `api_key=<to
 ### MCP tool (`ask_deepseek`)
 
 Runs the same endpoint as a thin stdio MCP wrapper (server name `deepseek-web`,
-single tool `ask_deepseek(question, timeout_seconds, new_conversation=False)`). It does **not** start `serve`
+single tool `ask_deepseek(question, timeout_seconds, new_conversation=False, mode="expert")`). It does **not** start `serve`
 itself — keep `serve` running separately.
 
 Calls continue the current conversation by default. The MCP process keeps successful
@@ -120,6 +120,18 @@ or reconnecting the process clears its history. Concurrent calls are serialized;
 failed calls are not added to history. An explicit reset clears history even if its
 request fails. The backend has one active browser chat: if another API/MCP client
 replaces it, the next call restores the conversation from history in a new browser chat.
+
+Use `mode: "instant"` to select Instant without enabling Expert or DeepThink:
+
+```json
+{"question": "Give a short answer", "mode": "instant"}
+{"question": "Continue", "mode": "instant"}
+```
+
+The mode applies to each call and defaults to `"expert"`; it does not reset chat history.
+It can be combined with `new_conversation: true`. The HTTP `/v1/chat/completions`
+endpoint accepts the same optional `mode` field. Restart `serve` and reconnect the
+MCP process after updating so both ends recognize the parameter.
 
 Pi (`~/.pi/agent/mcp.json`):
 

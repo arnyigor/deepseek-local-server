@@ -141,6 +141,7 @@ class CompletionService:
                     progress=lambda stage: self._set_stage(request_id, stage),
                     page=page_arg,
                     keep_open=True,
+                    mode=request.mode,
                 )
                 self._session_page = session_page
                 self._session_messages = list(request.messages)
