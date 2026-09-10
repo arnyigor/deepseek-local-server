@@ -9,3 +9,6 @@ build/
 deepseek-auth.json
 browser-profile/
 pow-cache/
+serve.log
+serve.err.log
+*.log

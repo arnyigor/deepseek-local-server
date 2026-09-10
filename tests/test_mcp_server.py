@@ -26,6 +26,16 @@ def test_build_content_rejects_missing_image_path():
         mcp_server._build_content("q", "/no/such/file.png")
 
 
+def _sse(reply) -> httpx.Response:
+    """Reply in the shape the gateway's SSE stream uses."""
+    if isinstance(reply, Exception):
+        raise reply
+    if isinstance(reply, int):
+        return httpx.Response(reply, text="test failure")
+    event = json.dumps({"choices": [{"delta": {"content": reply}, "finish_reason": None}]})
+    return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+
+
 @pytest.fixture
 def bridge(monkeypatch):
     requests = []
@@ -33,12 +43,7 @@ def bridge(monkeypatch):
 
     async def handle(request):
         requests.append(json.loads(request.content))
-        reply = replies.pop(0)
-        if isinstance(reply, Exception):
-            raise reply
-        if isinstance(reply, int):
-            return httpx.Response(reply, text="test failure")
-        return httpx.Response(200, json={"choices": [{"message": {"content": reply}}]})
+        return _sse(replies.pop(0))
 
     client_class = httpx.AsyncClient
     monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda **kwargs: client_class(
@@ -139,16 +144,20 @@ def test_cancellation_stops_request_without_updating_history(monkeypatch):
     started = asyncio.Event()
     stopped = asyncio.Event()
 
-    async def post(*args, **kwargs):
-        started.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            stopped.set()
+    class FakeStream:
+        async def __aenter__(self):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        async def __aexit__(self, *exc):
+            return False
 
     client = AsyncMock()
     client.__aenter__.return_value = client
-    client.post.side_effect = post
+    client.stream = lambda *args, **kwargs: FakeStream()  # used as async CM, not awaited
     monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda **_: client)
     monkeypatch.setattr(mcp_server, "read_api_token", lambda _: "test-token")
     monkeypatch.setattr(mcp_server, "_history", [])
