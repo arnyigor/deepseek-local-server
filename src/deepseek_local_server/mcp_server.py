@@ -111,20 +111,22 @@ def _split_row(line: str) -> list[str]:
         body = body[:-1]
     cells: list[str] = []
     current = ""
-    escaped = False
-    for char in body:
-        if escaped:
-            current += char
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "|":
+    index = 0
+    while index < len(body):
+        char = body[index]
+        next_char = body[index + 1] if index + 1 < len(body) else ""
+        if char == "\\" and next_char in {"|", "\\"}:
+            current += next_char  # escaped pipe or escaped backslash
+            index += 2
+            continue
+        if char == "|":
             cells.append(current)
             current = ""
         else:
             current += char
+        index += 1
     cells.append(current)
-    return [cell.strip().replace("**", "").replace("__", "") for cell in cells]
+    return [_strip_markers(cell.strip()) for cell in cells]
 
 
 def _is_table_separator(line: str) -> bool:

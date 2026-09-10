@@ -234,6 +234,25 @@ def test_escaped_pipe_stays_inside_one_cell(bridge):
     asyncio.run(run())
 
 
+def test_latex_backslashes_survive_in_table_cells(bridge):
+    requests, replies, ctx = bridge
+    replies.append(
+        {
+            "deltas": [
+                {
+                    "content": "| Тело | mu |\n|---|---|\n| Земля | 3{,}986\\cdot10^{14} |",
+                }
+            ]
+        }
+    )
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert "3{,}986\\cdot10^{14}" in result
+
+    asyncio.run(run())
+
+
 def test_wide_characters_keep_the_box_aligned(bridge):
     requests, replies, ctx = bridge
     table = "| 名前 | Флаг | Значение |\n|---|---|---|\n| 中文 | 🚀 | 1 |\n| ab | x | 2 |"
