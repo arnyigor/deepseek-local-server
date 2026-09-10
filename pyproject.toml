@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "deepseek-local-server"
 version = "0.2.0"
-description = "Hybrid DeepSeek Web gateway: direct Web API first, Playwright fallback, OpenAI API and MCP"
+description = "DeepSeek Web gateway: direct Web API with true SSE, OpenAI-compatible API and MCP"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "DeepSeek Local Server contributors" }]

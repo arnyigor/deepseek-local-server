@@ -1,15 +1,12 @@
-# deepseek-local-server v0.2 — hybrid direct + browser fallback
+# deepseek-local-server v0.2 — direct DeepSeek Web API gateway
 
-Local DeepSeek Web gateway for agents and OpenAI-compatible clients.
+Local DeepSeek Web gateway for agents and OpenAI-compatible clients. All chat traffic goes through the direct DeepSeek Web HTTP/SSE contract (SHA3 PoW executed locally via wasmtime). Chrome is used only once, for interactive auth capture.
 
 ## What changed from v0.1
 
-v0.1 drove the DeepSeek UI through Playwright for every request. v0.2 uses the internal Web Chat HTTP/SSE contract as the **primary transport** and keeps Playwright only for:
+v0.1 drove the DeepSeek UI through Playwright for every request. v0.2 talks the internal Web Chat HTTP/SSE contract directly. The browser fallback and Playwright automation layer were removed entirely — Chrome over CDP is used only for the one-time `auth` capture from your own logged-in browser.
 
-1. interactive login/auth capture;
-2. emergency fallback when the direct contract fails.
-
-Normal request path:
+Request path:
 
 ```text
 Pi / Claude / OpenAI client
@@ -18,41 +15,33 @@ Pi / Claude / OpenAI client
 127.0.0.1:9874
         |
         v
-Hybrid CompletionService
-        |
-        +--> Direct DeepSeek Web API + PoW + true SSE  [PRIMARY]
-        |
-        `--> Playwright UI automation                 [FALLBACK]
+CompletionService --> Direct DeepSeek Web API + PoW + true SSE
 ```
 
 ## Features
 
-- OpenAI `POST /v1/chat/completions`
-- true streaming for direct requests
-- `reasoning_content` for thinking modes
-- Fast, reasoning, search, Expert, Expert+reasoning aliases
+- OpenAI `POST /v1/chat/completions` (streaming and non-streaming)
+- true upstream SSE streaming, `reasoning_content` for thinking modes
+- image input (vision) via OpenAI image content parts
 - per-agent remote DeepSeek sessions (`x-agent-session` / `user`)
 - automatic session reset when the client history changes
 - basic OpenAI tool-call adapter
-- MCP `ask_deepseek`
+- MCP `ask_deepseek`: reasoning streamed via MCP progress notifications and returned as a `<reasoning>` block; images passed by local file path
 - basic Anthropic `/v1/messages` shim
 - basic OpenAI Responses `/v1/responses` shim
-- Playwright emergency fallback
 - local bearer token is always required
 - loopback-only binding is enforced
 
 ## Models
 
-| Model | Web mode | Reasoning | Search |
-|---|---|---:|---:|
-| `deepseek-chat` | default | no | no |
-| `deepseek-reasoner` | default | yes | no |
-| `deepseek-chat-search` | default | no | yes |
-| `deepseek-reasoner-search` | default | yes | yes |
-| `deepseek-expert` | expert | no | no |
-| `deepseek-v4-pro` | expert | yes | no |
+| Model | Reasoning | Search | Label |
+|---|---:|---:|---|
+| `deepseek-chat` | no | no | Fast |
+| `deepseek-reasoner` | yes | no | Fast + reasoning |
+| `deepseek-chat-search` | no | yes | Fast + web search |
+| `deepseek-reasoner-search` | yes | yes | Fast + reasoning + web search |
 
-Compatibility aliases: `deepseek-web -> deepseek-v4-pro`, `deepseek-r1 -> deepseek-reasoner`.
+Compatibility aliases (DeepSeek merged Instant/Expert/Vision into one model, 2026-09): `deepseek-web`, `deepseek-expert`, `deepseek-v4-pro` -> `deepseek-reasoner`; `deepseek-r1` -> `deepseek-reasoner`; `deepseek-r1-search` -> `deepseek-reasoner-search`; `deepseek-v3`, `deepseek-default` -> `deepseek-chat`.
 
 ## Windows installation
 
@@ -63,9 +52,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\pip.exe install -e ".[dev]"
 ```
 
-No `playwright install` needed: `auth` and the browser fallback drive your real, already-installed
-Google Chrome over the DevTools protocol instead of a Playwright-managed browser build. Set
-`DEEPSEEK_LOCAL_SERVER_CHROME_PATH` if Chrome isn't in one of the default install locations.
+No `playwright install` needed: `auth` drives your real, already-installed Google Chrome over the DevTools protocol instead of a Playwright-managed browser build. Set `DEEPSEEK_LOCAL_SERVER_CHROME_PATH` if Chrome isn't in one of the default install locations.
 
 ## First setup
 
@@ -92,7 +79,7 @@ Then:
 In another terminal:
 
 ```powershell
-.\.venv\Scripts\deepseek-local-server.exe chat "Reply exactly SERVICE_OK" --model deepseek-v4-pro
+.\.venv\Scripts\deepseek-local-server.exe chat "Reply exactly SERVICE_OK" --model deepseek-reasoner
 ```
 
 ## OpenAI client
@@ -108,13 +95,19 @@ token = (home / "token").read_text().strip()
 client = OpenAI(base_url="http://127.0.0.1:9874/v1", api_key=token)
 
 stream = client.chat.completions.create(
-    model="deepseek-v4-pro",
+    model="deepseek-reasoner",
     messages=[{"role": "user", "content": "Analyze this design."}],
     stream=True,
 )
 for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+    delta = chunk.choices[0].delta
+    if delta.reasoning_content:
+        print("[think]", delta.reasoning_content, end="", flush=True)
+    else:
+        print(delta.content or "", end="", flush=True)
 ```
+
+Images: send OpenAI vision `content` parts with `image_url` entries whose `url` is a base64 data URL (`data:image/png;base64,...`) — bytes are uploaded to DeepSeek directly. In MCP, pass `image_path` with a local file path instead.
 
 ## MCP / Pi
 
@@ -138,38 +131,16 @@ MCP tool:
 ```text
 ask_deepseek(
   question,
-  mode="expert" | "instant",
-  reasoning=true,
-  search=false,
-  new_conversation=false,
-  timeout_seconds=330
+  reasoning=true,          # deepseek-reasoner vs deepseek-chat
+  search=false,            # *-search model variant
+  new_conversation=false,  # clear MCP-side history before this call
+  image_path=None,         # local image file, e.g. "C:/pics/photo.jpg" (vision)
+  include_reasoning=True,  # false = return the bare answer only
+  timeout_seconds=<request timeout + 30>
 )
 ```
 
-Current DeepSeek Web contract does not expose search for Expert, so `mode="expert", search=true` is rejected instead of silently changing modes.
-
-## Browser fallback
-
-Enabled by default:
-
-```powershell
-$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="1"
-```
-
-If the direct API fails **before streaming has emitted data**, the request can fall back to Playwright. Once a live direct stream has emitted bytes, automatic fallback is intentionally disabled because mixing two answers would corrupt the stream.
-
-Disable fallback while testing the direct backend:
-
-```powershell
-$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="0"
-```
-
-Force old browser-only behavior:
-
-```powershell
-$env:DEEPSEEK_LOCAL_SERVER_DIRECT="0"
-$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="1"
-```
+Reasoning behavior: deltas stream to the client via MCP progress notifications, and the returned text contains the full chain as `<reasoning>...</reasoning>` followed by the answer. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
 ## Diagnostics
 
@@ -200,9 +171,9 @@ POST /v1/responses
 |---|---|
 | `DEEPSEEK_LOCAL_SERVER_HOST` | `127.0.0.1` |
 | `DEEPSEEK_LOCAL_SERVER_PORT` | `9874` |
-| `DEEPSEEK_LOCAL_SERVER_DIRECT` | `1` |
-| `DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK` | `1` |
-| `DEEPSEEK_LOCAL_SERVER_HEADLESS` | `1` |
+| `DEEPSEEK_LOCAL_SERVER_DEEPSEEK_URL` | `https://chat.deepseek.com/` |
+| `DEEPSEEK_LOCAL_SERVER_CHROME_PATH` | auto-detect |
+| `DEEPSEEK_LOCAL_SERVER_CHROME_DEBUG_PORT` | `9333` |
 | `DEEPSEEK_LOCAL_SERVER_TIMEOUT_SECONDS` | `300` |
 | `DEEPSEEK_LOCAL_SERVER_FETCH_TIMEOUT_SECONDS` | `60` |
 | `DEEPSEEK_LOCAL_SERVER_SESSION_TTL_SECONDS` | `7200` |
@@ -216,7 +187,7 @@ The direct Web API implementation was informed by the MIT-licensed `ForgetMeAI/F
 
 ## Important limitations
 
-This is an experimental adapter for DeepSeek Web, not the official DeepSeek API. Internal endpoints, PoW WASM exports, request headers, stream patches or UI selectors can change without notice.
+This is an experimental adapter for DeepSeek Web, not the official DeepSeek API. Internal endpoints, PoW WASM exports, request headers, stream patches or auth headers can change without notice.
 
 The direct backend is isolated under `direct/` specifically so those changes do not spread through the OpenAI/MCP layers.
 
