@@ -141,7 +141,7 @@ Reasoning and web search are always on (`deepseek-reasoner-search`) and the full
 
 For live reasoning while the model thinks, the tool must be reachable through the proxy path, because pi's progress bridge only runs there — set `"directTools": false` for this server (pi then shows the running reasoning as a status ticker). With `directTools: true` pi drops progress notifications entirely, so nothing appears until the call finishes.
 
-Reasoning behavior: while thinking, the newest slice of the reasoning is pushed as a progress message (`thinking: …`); the final result then carries the whole chain first, dimmed with SGR colour codes so it renders grey, followed by the answer on its own line — the answer keeps whatever colour the host paints tool output with. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Reasoning behavior: while thinking, the reasoning accumulated so far is pushed as a progress message (`thinking:` …) about every 1.5s — pi replaces the same status block in place, so it grows instead of flickering in fragments. The final result then carries a **bounded** slice of the chain (4k head + 2k tail, with an explicit `… [N chars of reasoning omitted] …` marker) followed by the answer. The chain is bounded on purpose: hosts truncate oversized tool output from the head, so an unbounded chain would eat the answer. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
 ## Rendering in pi
 

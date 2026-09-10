@@ -183,6 +183,21 @@ def test_no_ticker_without_a_progress_token(bridge):
     asyncio.run(run())
 
 
+def test_huge_reasoning_is_trimmed_so_the_answer_survives(bridge):
+    """Hosts cut oversized tool output from the head, so the chain must stay small."""
+    requests, replies, ctx = bridge
+    long_reasoning = "x" * 40_000
+    replies.append({"deltas": [{"reasoning_content": long_reasoning}, {"content": "THE-ANSWER"}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert result.endswith("\n\nTHE-ANSWER")
+        assert len(result) < 10_000
+        assert "chars of reasoning omitted" in result
+
+    asyncio.run(run())
+
+
 def test_ticker_streams_reasoning_when_the_caller_supports_progress(bridge):
     requests, replies, ctx = bridge
     ctx.request_context.meta = {"progress_token": 5}
@@ -200,7 +215,7 @@ def test_ticker_streams_reasoning_when_the_caller_supports_progress(bridge):
         result = await mcp_server.ask_deepseek("question", ctx)
         assert ctx.report_progress.await_count >= 1
         messages = [call.kwargs["message"] for call in ctx.report_progress.await_args_list]
-        assert all(m.startswith("thinking: ") for m in messages)
+        assert all(m.startswith("thinking:") for m in messages)
         assert "second thought" in messages[-1]  # newest slice is reported
         assert result == f"{_dimmed('<reasoning>\nfirst thought second thought\n</reasoning>')}\n\nthe answer"
 

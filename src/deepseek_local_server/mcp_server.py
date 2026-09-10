@@ -37,7 +37,12 @@ MODEL = "deepseek-reasoner-search"  # reasoning + web search are always on
 
 # Live reasoning ticker: only sent when the caller can receive progress at all.
 NOTIFY_INTERVAL_SECONDS = 1.5
-NOTIFY_TAIL_CHARS = 240
+NOTIFY_MAX_CHARS = 12_000
+
+# The chain stored in the result must stay small: hosts truncate oversized tool
+# output from the head, which would eat the answer if the chain came first.
+RESULT_REASONING_HEAD_CHARS = 4_000
+RESULT_REASONING_TAIL_CHARS = 2_000
 
 
 def _can_receive_progress(ctx: Context | None) -> bool:
@@ -58,6 +63,16 @@ def _can_receive_progress(ctx: Context | None) -> bool:
 
 _GRAY = "\x1b[90m"
 _RESET_FG = "\x1b[39m"
+
+
+def _trim_reasoning(text: str) -> str:
+    """Bound the chain kept in the result so the answer can never be pushed out."""
+    if len(text) <= RESULT_REASONING_HEAD_CHARS + RESULT_REASONING_TAIL_CHARS:
+        return text
+    omitted = len(text) - RESULT_REASONING_HEAD_CHARS - RESULT_REASONING_TAIL_CHARS
+    head = text[:RESULT_REASONING_HEAD_CHARS]
+    tail = text[-RESULT_REASONING_TAIL_CHARS:]
+    return f"{head}\n… [{omitted} chars of reasoning omitted] …\n{tail}"
 
 
 def _dim(text: str) -> str:
@@ -122,7 +137,7 @@ async def ask_deepseek(
         thinking_done = False
 
         async def _tick(text: str, *, force: bool = False) -> None:
-            """Push the newest slice of reasoning while the model is thinking."""
+            """Show the reasoning so far; hosts update the status block in place."""
             nonlocal last_notify
             if not live or not text:
                 return
@@ -130,8 +145,9 @@ async def ask_deepseek(
             if not force and now - last_notify < NOTIFY_INTERVAL_SECONDS:
                 return
             last_notify = now
+            shown = text if len(text) <= NOTIFY_MAX_CHARS else f"…\n{text[-NOTIFY_MAX_CHARS:]}"
             try:
-                await ctx.report_progress(progress=float(len(text)), message=f"thinking: …{text[-NOTIFY_TAIL_CHARS:]}")
+                await ctx.report_progress(progress=float(len(text)), message=f"thinking:\n{shown}")
             except Exception:
                 pass  # notifications are best-effort
 
@@ -200,7 +216,8 @@ async def ask_deepseek(
         answer = answer or "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
         if reasoning_text:
-            return f"{_dim(f'<reasoning>\n{reasoning_text}\n</reasoning>')}\n\n{answer}"
+            block = f"<reasoning>\n{_trim_reasoning(reasoning_text)}\n</reasoning>"
+            return f"{_dim(block)}\n\n{answer}"
         return answer
 
 

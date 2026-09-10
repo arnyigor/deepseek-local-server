@@ -54,7 +54,7 @@ async def main():
         "first tick well before the call ended": first_tick_before_end,
         "result still carries the full reasoning block": "\x1b[90m<reasoning>" in result,
         "answer follows the block": "план" in result or "₽" in result or answer_tail.strip() != "",
-        "ticks look like a ticker": all(m.startswith("thinking: ") for _, m in ctx.ticks) and has_block,
+        "ticks look like a ticker": all(m.startswith("thinking:") for _, m in ctx.ticks) and has_block,
     }
     for name, ok in checks.items():
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
