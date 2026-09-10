@@ -12,3 +12,5 @@ pow-cache/
 serve.log
 serve.err.log
 *.log
+.serena/
+e2e_baikal_test.jpg
