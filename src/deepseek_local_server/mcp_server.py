@@ -242,6 +242,9 @@ def _strip_markers(text: str) -> str:
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"\1", text)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    # math delimiters are noise in plain text; the formula itself stays
+    text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
+    text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     return re.sub(r"\$\$(.+?)\$\$", r"\1", text)
 
 

@@ -280,6 +280,8 @@ def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
             "",
             "Код: `**literal**` и $v_c$ остаются.",
             "",
+            "зависит от \\(\\mu\\) и \\(R\\)",
+            "",
             "```python",
             "s = '**not bold**'",
             "```",
@@ -293,6 +295,7 @@ def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
         assert "**Жирный**" not in result and "Жирный пункт" in result
         assert "[ссылка]" not in result and "ссылка (http://x.org/a)" in result
         assert "\\[" not in result and "v_1 = \\sqrt{\\frac{\\mu}{R}}" in result
+        assert "\\(\\mu\\)" not in result and "зависит от \\mu" in result  # inline math delimiters dropped
         assert "`**literal**`" in result  # code spans are untouched
         assert "s = '**not bold**'" in result  # fenced code is untouched
 
