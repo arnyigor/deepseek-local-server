@@ -305,6 +305,20 @@ def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
     asyncio.run(run())
 
 
+def test_inline_math_is_cleaned_but_prices_are_not(bridge):
+    requests, replies, ctx = bridge
+    answer = "Итог: $g_0 \\approx 9,8$ и билет за $5 или $10, а ещё \\ln(m_0/m_f) и \\max(a,b)."
+    replies.append({"deltas": [{"content": answer}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert "g₀ ≈ 9,8" in result  # inline math delimiters dropped
+        assert "$5 или $10" in result  # prices survive untouched
+        assert "ln(m₀/m_f)" in result and "max(a,b)" in result
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})

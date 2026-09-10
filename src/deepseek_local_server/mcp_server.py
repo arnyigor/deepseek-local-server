@@ -276,6 +276,18 @@ LATEX_SYMBOLS = {
     "rightarrow": "→",
     "leftarrow": "←",
     "circ": "∘",
+    "ln": "ln",
+    "log": "log",
+    "lg": "lg",
+    "exp": "exp",
+    "sin": "sin",
+    "cos": "cos",
+    "tan": "tan",
+    "cot": "cot",
+    "max": "max",
+    "min": "min",
+    "lim": "lim",
+    "det": "det",
 }
 SUPERSCRIPT = str.maketrans("0123456789+-n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ")
 SUBSCRIPT = str.maketrans("0123456789+-aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")
@@ -300,6 +312,7 @@ def _render_math(text: str) -> str:
     text = re.sub(r"\\qquad|\\quad|\\enspace", "   ", text)
     text = re.sub(r"\\hspace\s*\{[^{}]*\}", " ", text)
     text = re.sub(r"\\(?:begin|end)\s*\{[^{}]*\}", "", text)
+    text = re.sub(r"\\\s", " ", text)  # \ followed by whitespace is a plain space
     text = re.sub(r"\^\{([^{}]*)\}", lambda m: _script(m.group(1), SUPERSCRIPT), text)
     text = re.sub(r"_\{([^{}]*)\}", lambda m: _script(m.group(1), SUBSCRIPT), text)
     text = re.sub(r"\^([0-9n])", lambda m: _script(m.group(1), SUPERSCRIPT), text)
@@ -322,6 +335,8 @@ def _strip_markers(text: str) -> str:
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     text = re.sub(r"\$\$(.+?)\$\$", r"\1", text)
+    # inline $math$: only when it looks like math, so prices are left alone
+    text = re.sub(r"\$(?=[^$]*?[\\_^{}])([^$]+)\$", r"\1", text)
     return _render_math(text)
 
 
