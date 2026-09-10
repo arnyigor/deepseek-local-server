@@ -378,6 +378,94 @@ def test_latex_document_fence_is_reduced_to_readable_text(bridge):
     asyncio.run(run())
 
 
+RENDER_SAMPLES = {
+    "table": "| a | b |\n| :--- | ---: |\n| x | 1 |",
+    "header-only table": "| a | b |\n|---|---|",
+    "math": "$$\\Delta v = I_{\\text{уд}} g_0 \\ln\\frac{m_0}{m_k}$$",
+    "math block": "Текст\n$$\nT = 2\\pi\\sqrt{\\frac{a^3}{\\mu}}\n$$\nпосле",
+    "markers": "### Заголовок\n\n**Жирный** и [ссылка](http://x.org/a).",
+    "code": "```python\nx = {'a': 1}  # **raw**\\n```",
+    "markdown wrapper": "```markdown\n| a | b |\n|---|---|\n| 1 | 2 |\n```",
+    "latex document": "```latex\n\\begin{document}\n\\begin{tabular}{l}\n\\toprule\nA \\\\\n\\bottomrule\n\\end{tabular}\n\\end{document}\n```",
+    "quote": "> Примечание: $\\mu$ — параметр.",
+    "prices": "Билет за $5 или $10, и ещё 15 долларов.",
+    "wide chars": "| 名前 | Флаг |\n|---|---|\n| 中文 | 🚀 |",
+    "long word": "| a | " + "y" * 90 + " |\n|---|---|",
+}
+
+
+@pytest.mark.parametrize("sample", RENDER_SAMPLES.values(), ids=RENDER_SAMPLES.keys())
+def test_render_markdown_is_idempotent(sample):
+    """Rendering an already-rendered answer must not mangle it further."""
+    once = mcp_server._render_markdown(sample)
+    assert mcp_server._render_markdown(once) == once
+
+
+def test_code_blocks_survive_verbatim():
+    body = "x = {'a': 1}  # **raw** \\frac | pipe | {nested}"
+    out = mcp_server._render_markdown(f"до\n```python\n{body}\n```\nпосле")
+    assert body in out
+    assert out.startswith("до") and out.rstrip().endswith("после")
+
+
+def test_no_latex_scaffolding_survives():
+    out = mcp_server._render_markdown(RENDER_SAMPLES["latex document"])
+    for token in ("\\begin{", "\\end{", "\\toprule", "\\documentclass", "\\usepackage"):
+        assert token not in out
+
+
+def test_full_answer_snapshot():
+    answer = "\n".join(
+        [
+            "### Итог по Луне",
+            "",
+            "| Параметр | Значение |",
+            "| :--- | ---: |",
+            "| Радиус R | 1737,4 км |",
+            "| μ | 4,9028·10¹² м³/с² |",
+            "",
+            "Формула:",
+            "",
+            "\\[",
+            "v_1 = \\sqrt{\\frac{\\mu}{R}}",
+            "\\]",
+            "",
+            "- первая космическая ≈ 1,68 км/с;",
+            "",
+            "```python",
+            "print(1_737.4)  # **raw**",
+            "```",
+            "",
+            "> Примечание: μ = GM.",
+        ]
+    )
+    expected = "\n".join(
+        [
+            "Итог по Луне",
+            "",
+            "┌──────────┬───────────────────┐",
+            "│ Параметр │          Значение │",
+            "├──────────┼───────────────────┤",
+            "│ Радиус R │         1737,4 км │",
+            "│ μ        │ 4,9028·10¹² м³/с² │",
+            "└──────────┴───────────────────┘",
+            "",
+            "Формула:",
+            "",
+            "v₁ = √(μ/R)",
+            "",
+            "- первая космическая ≈ 1,68 км/с;",
+            "",
+            "```python",
+            "print(1_737.4)  # **raw**",
+            "```",
+            "",
+            "Примечание: μ = GM.",
+        ]
+    )
+    assert mcp_server._render_markdown(answer) == expected
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})

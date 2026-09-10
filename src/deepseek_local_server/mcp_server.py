@@ -188,7 +188,7 @@ def _box_table(rows: list[str]) -> list[str]:
     columns = max(len(header), 1, *(len(row) for row in body)) if body else max(len(header), 1)
     aligns += ["left"] * (columns - len(aligns))
     widths = [
-        max(_display_width(cell(header, i)), *(_display_width(cell(row, i)) for row in body))
+        max([_display_width(cell(header, i)), *(_display_width(cell(row, i)) for row in body)])
         for i in range(columns)
     ]
     widths = [min(width, TABLE_MAX_COLUMN_CHARS) for width in widths]
