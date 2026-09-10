@@ -26,7 +26,7 @@ CompletionService --> Direct DeepSeek Web API + PoW + true SSE
 - per-agent remote DeepSeek sessions (`x-agent-session` / `user`)
 - automatic session reset when the client history changes
 - basic OpenAI tool-call adapter
-- MCP `ask_deepseek`: always reasoning + web search; result is the dimmed reasoning chain followed by the answer; images passed by local file path
+- MCP `ask_deepseek`: always reasoning + web search; the result is the answer (markdown and LaTeX rendered for plain-text hosts) while reasoning streams as a one-line status ticker; images passed by local file path
 - basic Anthropic `/v1/messages` shim
 - basic OpenAI Responses `/v1/responses` shim
 - local bearer token is always required
@@ -137,15 +137,44 @@ ask_deepseek(
 )
 ```
 
-Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
+Reasoning and web search are always on (`deepseek-reasoner-search`); there are no mode toggles.
 
 For live reasoning while the model thinks, the tool must be reachable through the proxy path, because pi's progress bridge only runs there — set `"directTools": false` for this server (pi then shows the running reasoning as a status ticker). With `directTools: true` pi drops progress notifications entirely, so nothing appears until the call finishes.
 
-Reasoning behavior: while thinking, the reasoning accumulated so far is pushed as a progress message (`thinking:` …) about every 1.5s — pi replaces the same status block in place, so it grows instead of flickering in fragments. The final result then carries a **bounded** slice of the chain (4k head + 2k tail, with an explicit `… [N chars of reasoning omitted] …` marker) followed by the answer. The chain is bounded on purpose: hosts truncate oversized tool output from the head, so an unbounded chain would eat the answer. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Result layout:
+
+- the **answer comes first**, so a host that shows only the first lines of a collapsed tool block still shows the answer;
+- while thinking, a compact one-line ticker (`thinking: …` + the newest ~140 chars) is pushed about every 1.5s — pi replaces the same status line in place;
+- callers that cannot receive progress (direct-tool calls) get a **bounded** slice of the chain appended after the answer (`4k head + 2k tail` plus an `… [N chars of reasoning omitted] …` marker), dimmed with SGR 90.
+
+Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+
+## Rendering for plain-text hosts
+
+MCP hosts print tool output literally (pi even wraps it in its theme's `toolOutput` colour), so the answer is normalised before it is returned:
+
+- markdown tables become box-drawing tables (alignment taken from the `---:` row, cells wrapped, width budget 98, CJK/emoji measured in terminal cells);
+- markdown and LaTeX fences around the whole answer are unwrapped; ```` ```python ```` and other real code blocks stay verbatim;
+- LaTeX is converted to readable Unicode: `\frac{a}{b}` → `a/b`, `\sqrt{…}` → `√(…)`, `\mu` → μ, `\cdot` → ·, `10^{24}` → `10²⁴`, `v_1` → `v₁`, `\dot{m}` → `ṁ`, `\ln`, `\SI{a}{b}`, `\section{…}`, `tabular` → box table, and so on;
+- headings, `**bold**`, `[links](url)`, `>` markers and math delimiters are dropped; inline `$math$` is only unwrapped when it looks like math, so prices stay intact.
+
+## Testing
+
+The renderer is pinned by snapshots of **real** DeepSeek answers:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest          # unit + snapshot suite
+.\.venv\Scripts\python.exe capture_fixtures.py  # capture new real answers (needs the gateway)
+.\.venv\Scripts\python.exe refresh_fixtures.py  # re-render the saved fixtures offline
+.\.venv\Scripts\python.exe probe_reasoning_live.py   # live ticker check
+.\.venv\Scripts\python.exe probe_reasoning_block.py  # live no-ticker layout check
+```
+
+`tests/fixtures/` keeps each answer as `<name>.raw.txt` (as the model returned it) next to `<name>.expected.txt` (what the renderer must produce). Review the diff before committing a refresh.
 
 ## Rendering in pi
 
-Every line of MCP tool output is painted with the theme's `toolOutput` colour (`gray` in the shipped dark theme). The reasoning block overrides that per line with SGR 90, so it stays grey; to make the answer itself white, copy `dark.json` from the pi install into `<agent-dir>/themes/`, set `colors.toolOutput` to `text`, and pick that theme with `/theme`.
+Every line of MCP tool output is painted with the theme's `toolOutput` colour (`gray` in the shipped dark theme); the reasoning block overrides that per line with SGR 90, so it stays grey, and the answer keeps the theme colour. To make the answer white, copy `dark.json` from the pi install into `<agent-dir>/themes/`, set `colors.toolOutput` to `text`, and pick that theme with `/theme`. A collapsed tool block shows only its first lines (`collapsedResultLines`, 1–3 in `mcp.json` settings); press Ctrl+O or start pi with `--verbose` to see the whole result.
 
 ## Diagnostics
 
