@@ -151,7 +151,7 @@ def _dimmed(text: str) -> str:
     return "\n".join(f"\x1b[90m{line}\x1b[39m" if line else line for line in text.split("\n"))
 
 
-def test_reasoning_comes_first_dimmed_and_answer_last(bridge):
+def test_answer_comes_first_with_the_dimmed_chain_appended(bridge):
     requests, replies, ctx = bridge
     replies.extend([
         {"deltas": [{"reasoning_content": "think"}, {"reasoning_content": "ing"}, {"content": "the answer"}]},
@@ -160,10 +160,10 @@ def test_reasoning_comes_first_dimmed_and_answer_last(bridge):
 
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
-        assert result == f"{_dimmed('<reasoning>\nthinking\n</reasoning>')}\n\nthe answer"
-        assert result.endswith("the answer")  # answer keeps the host's normal colour
+        assert result == f"the answer\n\n---\n{_dimmed('<reasoning>\nthinking\n</reasoning>')}"
+        assert result.startswith("the answer")  # collapsed hosts show these lines first
         again = await mcp_server.ask_deepseek("follow-up", ctx)
-        assert again == "next"  # no reasoning deltas this time -> nothing to prepare
+        assert again == "next"  # no reasoning deltas this time -> nothing to append
 
     asyncio.run(run())
     # history stores the clean answer, not the reasoning wrapper
@@ -228,7 +228,7 @@ def test_no_ticker_without_a_progress_token(bridge):
 
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
-        assert result == f"{_dimmed('<reasoning>\nthink\n</reasoning>')}\n\nthe answer"
+        assert result == f"the answer\n\n---\n{_dimmed('<reasoning>\nthink\n</reasoning>')}"
         assert ctx.report_progress.await_count == 0
 
     asyncio.run(run())
@@ -242,7 +242,7 @@ def test_huge_reasoning_is_trimmed_so_the_answer_survives(bridge):
 
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
-        assert result.endswith("\n\nTHE-ANSWER")
+        assert result.startswith("THE-ANSWER")  # the answer survives any head truncation
         assert len(result) < 10_000
         assert "chars of reasoning omitted" in result
 
@@ -266,7 +266,9 @@ def test_ticker_streams_reasoning_when_the_caller_supports_progress(bridge):
         result = await mcp_server.ask_deepseek("question", ctx)
         assert ctx.report_progress.await_count >= 1
         messages = [call.kwargs["message"] for call in ctx.report_progress.await_args_list]
-        assert all(m.startswith("thinking:") for m in messages)
+        assert all(m.startswith("thinking: ") for m in messages)
+        assert all("\n" not in m for m in messages)  # one compact line, never a wall
+        assert all(len(m) <= mcp_server.NOTIFY_TAIL_CHARS + 32 for m in messages)
         assert "second thought" in messages[-1]  # newest slice is reported
         # the chain travelled by ticker, so the result must be the bare answer
         assert result == "the answer"

@@ -36,9 +36,9 @@ server = MCPServer(
 
 MODEL = "deepseek-reasoner-search"  # reasoning + web search are always on
 
-# Live reasoning ticker: only sent when the caller can receive progress at all.
+# Live reasoning ticker: one short single line, so it never floods the transcript.
 NOTIFY_INTERVAL_SECONDS = 1.5
-NOTIFY_MAX_CHARS = 12_000
+NOTIFY_TAIL_CHARS = 140
 
 # The chain stored in the result must stay small: hosts truncate oversized tool
 # output from the head, which would eat the answer if the chain came first.
@@ -214,15 +214,15 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on. While the model thinks, the reasoning
-    accumulated so far is reported as progress messages, so hosts that support
-    progress show it live (pi replaces its status line in place). Hosts that
-    cannot receive progress get the chain inside the result instead — a bounded
-    slice (4k head + 2k tail plus an omitted-chars marker), dimmed.
+    Reasoning and web search are always on. While the model thinks, a compact
+    one-line ticker with the newest reasoning slice is reported as progress
+    messages (pi replaces its status line in place). Hosts that cannot receive
+    progress get a bounded slice of the chain (4k head + 2k tail plus an
+    omitted-chars marker) appended to the result, dimmed, after the answer.
 
-    The result itself is the answer, with markdown tables redrawn as box-drawing
-    tables because hosts print results as literal text (and may show only the
-    first lines, so the answer has to come first).
+    The answer always comes first, with markdown tables redrawn as box-drawing
+    tables: hosts print results as literal text and may show only the first
+    lines of a collapsed tool block.
     """
     async with _lock:
         if new_conversation:
@@ -246,7 +246,7 @@ async def ask_deepseek(
         thinking_done = False
 
         async def _tick(text: str, *, force: bool = False) -> None:
-            """Show the reasoning so far; hosts update the status block in place."""
+            """Show the newest slice of reasoning as one compact status line."""
             nonlocal last_notify
             if not live or not text:
                 return
@@ -254,9 +254,11 @@ async def ask_deepseek(
             if not force and now - last_notify < NOTIFY_INTERVAL_SECONDS:
                 return
             last_notify = now
-            shown = text if len(text) <= NOTIFY_MAX_CHARS else f"…\n{text[-NOTIFY_MAX_CHARS:]}"
+            flat = " ".join(text.split())  # hosts append status text into the transcript
             try:
-                await ctx.report_progress(progress=float(len(text)), message=f"thinking:\n{shown}")
+                await ctx.report_progress(
+                    progress=float(len(text)), message=f"thinking: …{flat[-NOTIFY_TAIL_CHARS:]}"
+                )
             except Exception:
                 pass  # notifications are best-effort
 
@@ -325,9 +327,10 @@ async def ask_deepseek(
         answer = _render_markdown(answer) if answer else "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
         if reasoning_text and not live:
-            # No progress channel at all: the result must carry the chain itself.
+            # No progress channel at all: append the chain, but keep the answer first —
+            # hosts show only the first lines of a collapsed result.
             block = f"<reasoning>\n{_trim_reasoning(reasoning_text)}\n</reasoning>"
-            return f"{_dim(block)}\n\n{answer}"
+            return f"{answer}\n\n---\n{_dim(block)}"
         return answer
 
 
