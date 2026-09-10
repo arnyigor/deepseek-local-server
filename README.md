@@ -131,13 +131,14 @@ MCP tool:
 ```text
 ask_deepseek(
   question,
-  search=false,            # *-search model variant; reasoning is always on
   new_conversation=false,  # clear MCP-side history before this call
   image_path=None,         # local image file, e.g. "C:/pics/photo.jpg" (vision)
   include_reasoning=True,  # false = return the bare answer only
   timeout_seconds=<request timeout + 30>
 )
 ```
+
+Reasoning and web search are always on (`deepseek-reasoner-search`); there are no mode toggles.
 
 Reasoning behavior: deltas stream to the client via MCP progress notifications, and the returned text contains the full chain as `<reasoning>...</reasoning>` followed by the answer. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 

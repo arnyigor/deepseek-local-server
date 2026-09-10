@@ -39,7 +39,6 @@ async def main():
     answer = await mcp_server.ask_deepseek(
         f"Посчитай: сколько секунд в сутках? Умножь на 7 и прибавь 365. Дай только число без пояснений.",
         ctx,
-        search=False,
         new_conversation=True,
     )
     print(f"t={time.monotonic() - ctx.t0:5.1f}s  ANSWER: {answer!r}")
