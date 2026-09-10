@@ -247,6 +247,39 @@ def test_wide_characters_keep_the_box_aligned(bridge):
     asyncio.run(run())
 
 
+def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
+    requests, replies, ctx = bridge
+    answer = "\n".join(
+        [
+            "### Заголовок",
+            "",
+            "1. **Жирный** пункт и [ссылка](http://x.org/a).",
+            "",
+            "\\[",
+            "v_1 = \\sqrt{\\frac{\\mu}{R}}",
+            "\\]",
+            "",
+            "Код: `**literal**` и $v_c$ остаются.",
+            "",
+            "```python",
+            "s = '**not bold**'",
+            "```",
+        ]
+    )
+    replies.append({"deltas": [{"content": answer}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert "### " not in result and result.startswith("Заголовок")
+        assert "**Жирный**" not in result and "Жирный пункт" in result
+        assert "[ссылка]" not in result and "ссылка (http://x.org/a)" in result
+        assert "\\[" not in result and "v_1 = \\sqrt{\\frac{\\mu}{R}}" in result
+        assert "`**literal**`" in result  # code spans are untouched
+        assert "s = '**not bold**'" in result  # fenced code is untouched
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})

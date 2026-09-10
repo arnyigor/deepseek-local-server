@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import mimetypes
+import re
 import time
 import unicodedata
 from pathlib import Path
@@ -229,24 +230,60 @@ def _box_table(rows: list[str]) -> list[str]:
     return lines
 
 
-def _render_markdown(text: str) -> str:
-    """Turn markdown tables into box-drawing tables; other markdown stays as-is.
+def _clean_inline(text: str) -> str:
+    """Strip markdown markers that hosts print literally, leaving code spans alone."""
+    parts = re.split(r"(`[^`]*`)", text)
+    return "".join(part if part.startswith("`") else _strip_markers(part) for part in parts)
 
-    pi (and most MCP hosts) print tool results as literal text: a raw pipe table
-    wraps and loses its columns, while a bordered table survives any width.
+
+def _strip_markers(text: str) -> str:
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"\1", text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    return re.sub(r"\$\$(.+?)\$\$", r"\1", text)
+
+
+def _clean_line(line: str) -> str:
+    stripped = line.lstrip()
+    heading = re.match(r"#{1,6}\s+(.*)$", stripped)
+    if heading:
+        return line[: len(line) - len(stripped)] + heading.group(1).strip()
+    return _clean_inline(line)
+
+
+def _render_markdown(text: str) -> str:
+    """Make an answer readable in hosts that print tool results as literal text.
+
+    Markdown tables become box-drawing tables (a raw pipe table wraps and loses
+    its columns), heading/bold/link markers are dropped, fenced code and math
+    bodies are left exactly as they are.
     """
     lines = text.split("\n")
     out: list[str] = []
     index = 0
     in_fence = False
+    in_math = False
     while index < len(lines):
-        stripped = lines[index].strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        raw = lines[index]
+        stripped = raw.strip()
+        if not in_math and (stripped.startswith("```") or stripped.startswith("~~~")):
             in_fence = not in_fence
-            out.append(lines[index])
+            out.append(raw)
             index += 1
             continue
-        if not in_fence and stripped.startswith("|"):
+        if not in_fence and stripped in {"$$", "\\["}:
+            in_math = True
+            index += 1
+            continue
+        if not in_fence and stripped in {"$$", "\\]"} and in_math:
+            in_math = False
+            index += 1
+            continue
+        if in_fence or in_math:
+            out.append(raw)
+            index += 1
+            continue
+        if stripped.startswith("|"):
             block: list[str] = []
             while index < len(lines) and lines[index].strip().startswith("|"):
                 block.append(lines[index])
@@ -256,7 +293,7 @@ def _render_markdown(text: str) -> str:
                 continue
             out.extend(block)
             continue
-        out.append(lines[index])
+        out.append(_clean_line(raw))
         index += 1
     return "\n".join(out)
 
