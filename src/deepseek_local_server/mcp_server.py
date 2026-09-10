@@ -238,6 +238,79 @@ def _clean_inline(text: str) -> str:
     return "".join(part if part.startswith("`") else _strip_markers(part) for part in parts)
 
 
+LATEX_SYMBOLS = {
+    "mu": "μ",
+    "pi": "π",
+    "alpha": "α",
+    "beta": "β",
+    "gamma": "γ",
+    "delta": "δ",
+    "Delta": "Δ",
+    "epsilon": "ε",
+    "theta": "θ",
+    "lambda": "λ",
+    "rho": "ρ",
+    "sigma": "σ",
+    "Sigma": "Σ",
+    "tau": "τ",
+    "phi": "φ",
+    "omega": "ω",
+    "Omega": "Ω",
+    "approx": "≈",
+    "times": "×",
+    "cdot": "·",
+    "pm": "±",
+    "le": "≤",
+    "leq": "≤",
+    "ge": "≥",
+    "geq": "≥",
+    "ne": "≠",
+    "neq": "≠",
+    "infty": "∞",
+    "sum": "Σ",
+    "prod": "Π",
+    "int": "∫",
+    "partial": "∂",
+    "nabla": "∇",
+    "to": "→",
+    "rightarrow": "→",
+    "leftarrow": "←",
+    "circ": "∘",
+}
+SUPERSCRIPT = str.maketrans("0123456789+-n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ")
+SUBSCRIPT = str.maketrans("0123456789+-aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")
+
+
+def _script(body: str, table: dict[int, str]) -> str:
+    return body.lower().translate(table) if _is_scriptable(body, table) else f"({body})"
+
+
+def _is_scriptable(body: str, table: dict[int, str]) -> bool:
+    return bool(body) and all(ord(char) in table for char in body.lower())
+
+
+def _render_math(text: str) -> str:
+    """Turn common LaTeX into readable Unicode; unknown commands are kept verbatim."""
+    for _ in range(4):  # innermost fractions first
+        text = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1/\2", text)
+    text = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"√(\1)", text)
+    text = re.sub(r"\\(?:text|mathrm|operatorname)\s*\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\(?:left|right|displaystyle)\s*", "", text)
+    text = text.replace("{,}", ",").replace("\\,", " ").replace("\\;", " ").replace("\\!", "")
+    text = re.sub(r"\^\{([^{}]*)\}", lambda m: _script(m.group(1), SUPERSCRIPT), text)
+    text = re.sub(r"_\{([^{}]*)\}", lambda m: _script(m.group(1), SUBSCRIPT), text)
+    text = re.sub(r"\^([0-9n])", lambda m: _script(m.group(1), SUPERSCRIPT), text)
+    text = re.sub(
+        r"(?<=[A-Za-z0-9)])([_^])([0-9a-z])\b",
+        lambda m: m.group(0)
+        if not _is_scriptable(m.group(2), SUPERSCRIPT if m.group(1) == "^" else SUBSCRIPT)
+        else _script(m.group(2), SUPERSCRIPT if m.group(1) == "^" else SUBSCRIPT),
+        text,
+    )
+    text = re.sub(r"\\([A-Za-z]+)", lambda m: LATEX_SYMBOLS.get(m.group(1), m.group(0)), text)
+    return re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", text))
+
+
 def _strip_markers(text: str) -> str:
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
     text = re.sub(r"(?<!\w)__(.+?)__(?!\w)", r"\1", text)
@@ -245,14 +318,19 @@ def _strip_markers(text: str) -> str:
     # math delimiters are noise in plain text; the formula itself stays
     text = re.sub(r"\\\((.*?)\\\)", r"\1", text)
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
-    return re.sub(r"\$\$(.+?)\$\$", r"\1", text)
+    text = re.sub(r"\$\$(.+?)\$\$", r"\1", text)
+    return _render_math(text)
 
 
 def _clean_line(line: str) -> str:
     stripped = line.lstrip()
+    indent = line[: len(line) - len(stripped)]
     heading = re.match(r"#{1,6}\s+(.*)$", stripped)
     if heading:
-        return line[: len(line) - len(stripped)] + heading.group(1).strip()
+        return indent + heading.group(1).strip()
+    quote = re.match(r">\s?(.*)$", stripped)
+    if quote:
+        return indent + _clean_inline(quote.group(1))
     return _clean_inline(line)
 
 
@@ -285,7 +363,7 @@ def _render_markdown(text: str) -> str:
             index += 1
             continue
         if in_fence or in_math:
-            out.append(raw)
+            out.append(raw if in_fence else _render_math(raw))
             index += 1
             continue
         if stripped.startswith("|"):

@@ -248,7 +248,7 @@ def test_latex_backslashes_survive_in_table_cells(bridge):
 
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
-        assert "3{,}986\\cdot10^{14}" in result
+        assert "3,986·10¹⁴" in result  # LaTeX rendered, not mangled
 
     asyncio.run(run())
 
@@ -285,6 +285,8 @@ def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
             "```python",
             "s = '**not bold**'",
             "```",
+            "",
+            "> Примечание: **важно**.",
         ]
     )
     replies.append({"deltas": [{"content": answer}]})
@@ -294,10 +296,11 @@ def test_markdown_markers_are_cleaned_but_code_and_math_survive(bridge):
         assert "### " not in result and result.startswith("Заголовок")
         assert "**Жирный**" not in result and "Жирный пункт" in result
         assert "[ссылка]" not in result and "ссылка (http://x.org/a)" in result
-        assert "\\[" not in result and "v_1 = \\sqrt{\\frac{\\mu}{R}}" in result
-        assert "\\(\\mu\\)" not in result and "зависит от \\mu" in result  # inline math delimiters dropped
+        assert "\\[" not in result and "v₁ = √(μ/R)" in result
+        assert "\\(\\mu\\)" not in result and "зависит от μ и R" in result  # math delimiters dropped
         assert "`**literal**`" in result  # code spans are untouched
         assert "s = '**not bold**'" in result  # fenced code is untouched
+        assert ">" not in result and "Примечание: важно." in result  # quote marker dropped
 
     asyncio.run(run())
 
