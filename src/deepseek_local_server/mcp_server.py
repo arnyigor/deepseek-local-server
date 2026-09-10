@@ -59,9 +59,9 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on. The returned text carries the whole
-    reasoning chain as one block before the answer:
-    <reasoning>...</reasoning> + final answer.
+    Reasoning and web search are always on. The returned text is the answer first,
+    followed by the complete reasoning chain in one block:
+    answer + <reasoning>...</reasoning>.
 
     Because MCP tool results are delivered atomically, the complete reasoning is
     also pushed once as a progress notification the moment the thinking phase
@@ -161,7 +161,7 @@ async def ask_deepseek(
         answer = answer or "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
         if reasoning_text:
-            return f"<reasoning>\n{reasoning_text}\n</reasoning>\n\n{answer}"
+            return f"{answer}\n\n---\n<reasoning>\n{reasoning_text}\n</reasoning>"
         return answer
 
 

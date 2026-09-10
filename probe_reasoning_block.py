@@ -1,10 +1,10 @@
-"""Live check: the whole reasoning is delivered before the answer.
+"""Live check: answer first, then the whole reasoning; reasoning also pushed early.
 
 Runs the exact tool code path (mcp_server.ask_deepseek) in-process against the
 running local server, with a Context stub that records notifications. Expected:
-exactly ONE progress notification carrying the complete reasoning (sent when
-the thinking phase ends, i.e. before the answer), plus the same chain as a
-single '<reasoning>...</reasoning>' block in the returned text.
+exactly ONE progress notification carrying the complete reasoning (sent when the
+thinking phase ends, i.e. before the answer), and a result shaped as
+'<answer>\n\n---\n<reasoning>...</reasoning>'.
 """
 import asyncio
 import sys
@@ -39,14 +39,14 @@ async def main():
     for kind, msg in ctx.events:
         print(f"  {kind}: {msg[:90]!r}")
 
-    one_block = answer.startswith("<reasoning>\n") and answer.count("<reasoning>") == 1
-    closed = "</reasoning>\n\n" in answer
-    body = answer.split("</reasoning>\n\n", 1)[-1] if closed else ""
+    marker = "\n\n---\n<reasoning>\n"
+    has_block = answer.count("<reasoning>") == 1 and answer.endswith("</reasoning>")
+    body, chain = (answer.split(marker, 1) if marker in answer else (answer, ""))
+    chain = chain.removesuffix("</reasoning>")
     # exactly one notification, carrying the full reasoning, before the result
     notified_full = len(ctx.events) == 1 and ctx.events[0][0] == "progress"
     notified_text = ctx.events[0][1] if notified_full else ""
-    chain = answer.split("</reasoning>", 1)[0].removeprefix("<reasoning>\n") if one_block else ""
-    ok = one_block and closed and expected in body and notified_full and notified_text.strip() == chain.strip()
+    ok = has_block and expected in body and notified_full and notified_text.strip() == chain.strip()
     print("\nRESULT:", "PASS" if ok else "FAIL")
 
 asyncio.run(main())

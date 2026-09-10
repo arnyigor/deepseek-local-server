@@ -26,7 +26,7 @@ CompletionService --> Direct DeepSeek Web API + PoW + true SSE
 - per-agent remote DeepSeek sessions (`x-agent-session` / `user`)
 - automatic session reset when the client history changes
 - basic OpenAI tool-call adapter
-- MCP `ask_deepseek`: always reasoning + web search; the full reasoning chain is returned as a `<reasoning>` block; images passed by local file path
+- MCP `ask_deepseek`: always reasoning + web search; answer first, then the full reasoning chain in a `<reasoning>` block; images passed by local file path
 - basic Anthropic `/v1/messages` shim
 - basic OpenAI Responses `/v1/responses` shim
 - local bearer token is always required
@@ -139,7 +139,7 @@ ask_deepseek(
 
 Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
 
-Reasoning behavior: the tool returns the complete reasoning chain as one `<reasoning>...</reasoning>` block followed by the answer, and pushes that same chain once as a progress notification the moment thinking ends — so clients that surface progress (e.g. the pi proxy path) show it before the answer arrives. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Reasoning behavior: the tool returns the answer first, then the complete reasoning chain in one `<reasoning>...</reasoning>` block, and pushes that same chain once as a progress notification the moment thinking ends — so clients that surface progress (e.g. the pi proxy path) show it before the answer arrives. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
 ## Diagnostics
 
