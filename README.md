@@ -139,7 +139,7 @@ ask_deepseek(
 
 Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
 
-Reasoning behavior: the tool returns the complete reasoning chain as one `<reasoning>...</reasoning>` block followed by the answer (no chunked progress updates). Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Reasoning behavior: the tool returns the complete reasoning chain as one `<reasoning>...</reasoning>` block followed by the answer, and pushes that same chain once as a progress notification the moment thinking ends — so clients that surface progress (e.g. the pi proxy path) show it before the answer arrives. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
 ## Diagnostics
 

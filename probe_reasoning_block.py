@@ -1,9 +1,10 @@
-"""Live check: the tool returns the WHOLE reasoning chain as one block.
+"""Live check: the whole reasoning is delivered before the answer.
 
 Runs the exact tool code path (mcp_server.ask_deepseek) in-process against the
-running local server, with a Context stub that records any notifications:
-there must be none (no chunked progress updates), and the returned text must be
-one complete '<reasoning>...</reasoning>' block followed by the answer.
+running local server, with a Context stub that records notifications. Expected:
+exactly ONE progress notification carrying the complete reasoning (sent when
+the thinking phase ends, i.e. before the answer), plus the same chain as a
+single '<reasoning>...</reasoning>' block in the returned text.
 """
 import asyncio
 import sys
@@ -41,7 +42,11 @@ async def main():
     one_block = answer.startswith("<reasoning>\n") and answer.count("<reasoning>") == 1
     closed = "</reasoning>\n\n" in answer
     body = answer.split("</reasoning>\n\n", 1)[-1] if closed else ""
-    ok = one_block and closed and expected in body and not ctx.events
+    # exactly one notification, carrying the full reasoning, before the result
+    notified_full = len(ctx.events) == 1 and ctx.events[0][0] == "progress"
+    notified_text = ctx.events[0][1] if notified_full else ""
+    chain = answer.split("</reasoning>", 1)[0].removeprefix("<reasoning>\n") if one_block else ""
+    ok = one_block and closed and expected in body and notified_full and notified_text.strip() == chain.strip()
     print("\nRESULT:", "PASS" if ok else "FAIL")
 
 asyncio.run(main())

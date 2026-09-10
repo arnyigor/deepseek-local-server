@@ -62,6 +62,10 @@ async def ask_deepseek(
     Reasoning and web search are always on. The returned text carries the whole
     reasoning chain as one block before the answer:
     <reasoning>...</reasoning> + final answer.
+
+    Because MCP tool results are delivered atomically, the complete reasoning is
+    also pushed once as a progress notification the moment the thinking phase
+    ends, so clients that surface progress show it before the answer.
     """
     async with _lock:
         if new_conversation:
@@ -80,6 +84,19 @@ async def ask_deepseek(
         answer_acc: list[str] = []
         tool_markup: list[str] = []
         error_text: str | None = None
+        notified = False
+
+        async def _notify_reasoning() -> None:
+            """Push the complete reasoning once, as the thinking phase ends."""
+            nonlocal notified
+            if notified or not reasoning_acc:
+                return
+            notified = True
+            try:
+                text = "".join(reasoning_acc)
+                await ctx.report_progress(progress=float(len(text)), message=text)
+            except Exception:
+                pass  # notifications are best-effort
 
         async def _consume(client: httpx.AsyncClient) -> None:
             nonlocal error_text
@@ -116,6 +133,7 @@ async def ask_deepseek(
                         if delta.get("reasoning_content"):
                             reasoning_acc.append(delta["reasoning_content"])
                         if delta.get("content"):
+                            await _notify_reasoning()  # thinking finished, answer starts
                             answer_acc.append(delta["content"])
                         if delta.get("tool_calls"):
                             tool_markup.append(json.dumps(delta["tool_calls"], ensure_ascii=False))
@@ -129,6 +147,7 @@ async def ask_deepseek(
                 finally:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
+                await _notify_reasoning()  # no answer deltas (e.g. empty response)
         except httpx.ConnectError:
             return f"Could not reach deepseek-local-server at {_settings.api_base_url}. Start `deepseek-local-server serve`."
         except httpx.TimeoutException:
