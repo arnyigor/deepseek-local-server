@@ -20,7 +20,7 @@ class DeepSeekPatchParser:
     def __init__(self) -> None:
         self.fragments: list[dict[str, Any]] = []
         self.full_content = ""
-        self.message_id: str | None = None
+        self.message_id: int | None = None
         self.finish_reason: str | None = None
         self.model_error: str | None = None
         self._emitted_content = ""
@@ -59,7 +59,7 @@ class DeepSeekPatchParser:
 
     def feed(self, event: dict[str, Any]) -> list[StreamPiece]:
         if event.get("response_message_id") is not None and not self.message_id:
-            self.message_id = str(event["response_message_id"])
+            self.message_id = int(event["response_message_id"])
         if event.get("finish_reason") is not None:
             self.finish_reason = str(event["finish_reason"])
         if event.get("type") == "error":
@@ -76,7 +76,7 @@ class DeepSeekPatchParser:
         if isinstance(value, dict) and isinstance(value.get("response"), dict):
             response = value["response"]
             if response.get("message_id") is not None:
-                self.message_id = str(response["message_id"])
+                self.message_id = int(response["message_id"])
             if response.get("content") is not None:
                 self.full_content = str(response["content"])
             if isinstance(response.get("fragments"), list):

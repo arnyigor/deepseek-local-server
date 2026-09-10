@@ -49,8 +49,7 @@ def command_serve(settings: Settings) -> int:
     ensure_api_token(settings)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     print(f"Endpoint: {settings.api_base_url}/v1")
-    print(f"Primary:  {'direct DeepSeek Web API' if settings.direct_enabled else 'disabled'}")
-    print(f"Fallback: {'system Chrome (CDP)' if settings.browser_fallback_enabled else 'disabled'}")
+    print("Primary:  direct DeepSeek Web API")
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info")
     return 0
 

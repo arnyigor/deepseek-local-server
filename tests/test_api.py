@@ -9,7 +9,7 @@ from deepseek_local_server.config import Settings
 
 class DummyService:
     def runtime_status(self):
-        return {"direct_enabled": True, "browser_fallback_enabled": True}
+        return {"backend": "direct"}
 
     async def close(self):
         pass

@@ -32,14 +32,9 @@ class Settings:
     host: str = "127.0.0.1"
     port: int = 9874
     deepseek_url: str = "https://chat.deepseek.com/"
-    direct_enabled: bool = True
-    browser_fallback_enabled: bool = True
-    headless_fallback: bool = True
     chrome_debug_port: int = 9333
     request_timeout_seconds: float = 300.0
     fetch_timeout_seconds: float = 60.0
-    stable_seconds: float = 2.0
-    poll_interval_seconds: float = 0.35
     max_prompt_chars: int = 200_000
     session_ttl_seconds: float = 7200.0
     max_session_messages: int = 100
@@ -52,14 +47,9 @@ class Settings:
             host=os.getenv("DEEPSEEK_LOCAL_SERVER_HOST", "127.0.0.1"),
             port=int(os.getenv("DEEPSEEK_LOCAL_SERVER_PORT", "9874")),
             deepseek_url=os.getenv("DEEPSEEK_LOCAL_SERVER_DEEPSEEK_URL", "https://chat.deepseek.com/"),
-            direct_enabled=_env_bool("DEEPSEEK_LOCAL_SERVER_DIRECT", True),
-            browser_fallback_enabled=_env_bool("DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK", True),
-            headless_fallback=_env_bool("DEEPSEEK_LOCAL_SERVER_HEADLESS", True),
             chrome_debug_port=int(os.getenv("DEEPSEEK_LOCAL_SERVER_CHROME_DEBUG_PORT", "9333")),
             request_timeout_seconds=float(os.getenv("DEEPSEEK_LOCAL_SERVER_TIMEOUT_SECONDS", "300")),
             fetch_timeout_seconds=float(os.getenv("DEEPSEEK_LOCAL_SERVER_FETCH_TIMEOUT_SECONDS", "60")),
-            stable_seconds=float(os.getenv("DEEPSEEK_LOCAL_SERVER_STABLE_SECONDS", "2.0")),
-            poll_interval_seconds=float(os.getenv("DEEPSEEK_LOCAL_SERVER_POLL_INTERVAL_SECONDS", "0.35")),
             max_prompt_chars=int(os.getenv("DEEPSEEK_LOCAL_SERVER_MAX_PROMPT_CHARS", "200000")),
             session_ttl_seconds=float(os.getenv("DEEPSEEK_LOCAL_SERVER_SESSION_TTL_SECONDS", "7200")),
             max_session_messages=int(os.getenv("DEEPSEEK_LOCAL_SERVER_MAX_SESSION_MESSAGES", "100")),
@@ -85,9 +75,6 @@ class Settings:
             raise ValueError("DEEPSEEK_LOCAL_SERVER_MAX_PROMPT_CHARS is too small")
         if self.max_session_messages < 1 or self.max_concurrent_direct < 1:
             raise ValueError("Session and concurrency limits must be positive")
-
-    def with_headless(self, value: bool) -> "Settings":
-        return replace(self, headless_fallback=value)
 
     @property
     def api_base_url(self) -> str:

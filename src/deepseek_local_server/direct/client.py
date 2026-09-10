@@ -22,7 +22,7 @@ LOGGER = logging.getLogger("deepseek_local_server.direct")
 @dataclass(slots=True)
 class RemoteSession:
     id: str | None = None
-    parent_message_id: str | None = None
+    parent_message_id: int | None = None
     created_at: float = 0.0
     message_count: int = 0
 

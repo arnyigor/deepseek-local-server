@@ -3,7 +3,7 @@ from deepseek_local_server.direct.stream import DeepSeekPatchParser
 
 def test_full_snapshot_and_incremental_fragment():
     p = DeepSeekPatchParser()
-    pieces = p.feed({"v": {"response": {"message_id": "m1", "fragments": [
+    pieces = p.feed({"v": {"response": {"message_id": 1, "fragments": [
         {"type": "THINK", "content": "why"},
         {"type": "RESPONSE", "content": "hel"},
     ]}}})
@@ -12,7 +12,7 @@ def test_full_snapshot_and_incremental_fragment():
     assert [(x.kind, x.text) for x in pieces] == [("content", "lo")]
     assert p.content == "hello"
     assert p.reasoning == "why"
-    assert p.message_id == "m1"
+    assert p.message_id == 1
 
 
 def test_content_fallback_path():

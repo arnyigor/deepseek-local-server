@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from typing import AsyncIterator
 from uuid import uuid4
 
-from deepseek_local_server.browser.fallback import BrowserFallback
 from deepseek_local_server.config import Settings
 from deepseek_local_server.direct.client import DeepSeekDirectClient
 from deepseek_local_server.models import ModelSpec, resolve_model
@@ -32,15 +31,9 @@ class CompletionResult:
 
 
 class CompletionService:
-    def __init__(
-        self,
-        settings: Settings,
-        direct: DeepSeekDirectClient | None = None,
-        browser: BrowserFallback | None = None,
-    ) -> None:
+    def __init__(self, settings: Settings, direct: DeepSeekDirectClient | None = None) -> None:
         self.settings = settings
         self.direct = direct or DeepSeekDirectClient(settings)
-        self.browser = browser or BrowserFallback(settings)
         self.sessions = SessionStore()
         self.request_count = 0
         self.last_request_id: str | None = None
@@ -55,8 +48,6 @@ class CompletionService:
             "last_request_at": self.last_request_at,
             "last_backend": self.last_backend,
             "last_error": self.last_error,
-            "direct_enabled": self.settings.direct_enabled,
-            "browser_fallback_enabled": self.settings.browser_fallback_enabled,
         }
 
     def _begin(self) -> str:
@@ -101,38 +92,21 @@ class CompletionService:
         async with session.lock:
             prompt, messages_used = self._prompt_for_locked_session(request, session)
             fresh_prompt = build_prompt(request)
-            if self.settings.direct_enabled:
-                try:
-                    file_ids = await self._upload_images(messages_used, spec)
-                    async for piece in self.direct.stream(
-                        prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
-                    ):
-                        if piece.kind == "reasoning":
-                            reasoning += piece.text
-                        else:
-                            content += piece.text
-                    session.last_messages = list(request.messages)
-                    self.last_backend = "direct"
-                except Exception as exc:
-                    LOGGER.warning("[%s] direct backend failed: %s", request_id, exc, exc_info=True)
-                    if not self.settings.browser_fallback_enabled:
-                        self.last_error = f"{type(exc).__name__}: {exc}"
-                        raise
-                    backend = "browser-fallback"
-                    answer = await self.browser.query(build_prompt(request), spec)
-                    content = answer.content
-                    reasoning = ""
-                    # Browser UI state is independent from the direct remote chain.
-                    session.reset()
-                    self.last_backend = backend
-            else:
-                if not self.settings.browser_fallback_enabled:
-                    raise RuntimeError("Both direct and browser backends are disabled")
-                backend = "browser-fallback"
-                answer = await self.browser.query(build_prompt(request), spec)
-                content = answer.content
-                session.reset()
-                self.last_backend = backend
+            try:
+                file_ids = await self._upload_images(messages_used, spec)
+                async for piece in self.direct.stream(
+                    prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
+                ):
+                    if piece.kind == "reasoning":
+                        reasoning += piece.text
+                    else:
+                        content += piece.text
+                session.last_messages = list(request.messages)
+                self.last_backend = "direct"
+            except Exception as exc:
+                LOGGER.warning("[%s] direct backend failed: %s", request_id, exc, exc_info=True)
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                raise
 
         parsed = parse_output(content, allowed)
         usage = Usage(
@@ -176,7 +150,6 @@ class CompletionService:
         request_id = self._begin()
         spec = resolve_model(request.model)
         session = await self.sessions.get(session_key)
-        emitted_any = False
         content = ""
         reasoning = ""
         backend = "direct"
@@ -184,41 +157,23 @@ class CompletionService:
         async with session.lock:
             prompt, messages_used = self._prompt_for_locked_session(request, session)
             fresh_prompt = build_prompt(request)
-            if self.settings.direct_enabled:
-                try:
-                    file_ids = await self._upload_images(messages_used, spec)
-                    async for piece in self.direct.stream(
-                        prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
-                    ):
-                        emitted_any = True
-                        if piece.kind == "reasoning":
-                            reasoning += piece.text
-                            yield {"delta": {"reasoning_content": piece.text}, "finish_reason": None, "backend": "direct"}
-                        else:
-                            content += piece.text
-                            yield {"delta": {"content": piece.text}, "finish_reason": None, "backend": "direct"}
-                    session.last_messages = list(request.messages)
-                    self.last_backend = "direct"
-                except Exception as exc:
-                    LOGGER.warning("[%s] direct stream failed: %s", request_id, exc, exc_info=True)
-                    if emitted_any or not self.settings.browser_fallback_enabled:
-                        self.last_error = f"{type(exc).__name__}: {exc}"
-                        raise
-                    backend = "browser-fallback"
-                    answer = await self.browser.query(build_prompt(request), spec)
-                    content = answer.content
-                    session.reset()
-                    self.last_backend = backend
-                    yield {"delta": {"content": content}, "finish_reason": None, "backend": backend}
-            else:
-                if not self.settings.browser_fallback_enabled:
-                    raise RuntimeError("Both direct and browser backends are disabled")
-                backend = "browser-fallback"
-                answer = await self.browser.query(build_prompt(request), spec)
-                content = answer.content
-                session.reset()
-                self.last_backend = backend
-                yield {"delta": {"content": content}, "finish_reason": None, "backend": backend}
+            try:
+                file_ids = await self._upload_images(messages_used, spec)
+                async for piece in self.direct.stream(
+                    prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
+                ):
+                    if piece.kind == "reasoning":
+                        reasoning += piece.text
+                        yield {"delta": {"reasoning_content": piece.text}, "finish_reason": None, "backend": "direct"}
+                    else:
+                        content += piece.text
+                        yield {"delta": {"content": piece.text}, "finish_reason": None, "backend": "direct"}
+                session.last_messages = list(request.messages)
+                self.last_backend = "direct"
+            except Exception as exc:
+                LOGGER.warning("[%s] direct stream failed: %s", request_id, exc, exc_info=True)
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                raise
 
         usage = Usage(
             prompt_tokens=estimate_tokens(prompt),
@@ -226,6 +181,3 @@ class CompletionService:
             reasoning_tokens=estimate_tokens(reasoning),
         )
         yield {"delta": {}, "finish_reason": "stop", "backend": backend, "usage": usage}
-
-    async def close(self) -> None:
-        await self.browser.close()

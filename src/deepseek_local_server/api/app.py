@@ -110,7 +110,7 @@ def create_app(settings: Settings | None = None, service: CompletionService | An
                     yield sse({"error": {"message": str(exc), "type": type(exc).__name__, "code": "stream_error"}})
                     yield sse("[DONE]")
 
-            mode = "buffered-tools" if payload.tools else "live-direct-with-buffered-browser-fallback"
+            mode = "buffered-tools" if payload.tools else "live-direct"
             return StreamingResponse(generate(), media_type="text/event-stream", headers={"X-DeepSeek-Local-Stream-Mode": mode})
 
         try:
