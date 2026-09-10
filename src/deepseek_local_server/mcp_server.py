@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver import MCPServer
 
 from deepseek_local_server.auth import read_api_token
 from deepseek_local_server.config import Settings
@@ -34,21 +34,18 @@ server = MCPServer(
 
 MODEL = "deepseek-reasoner-search"  # reasoning + web search are always on
 
+_GRAY = "\x1b[90m"
+_RESET_FG = "\x1b[39m"
 
-def _client_gets_progress(ctx: Context) -> bool:
-    """True when the caller sent a progressToken, i.e. notifications are delivered.
 
-    pi's proxy path sets it (progress lands in the UI); the direct-tools path
-    does not, so reasoning has to travel inside the tool result instead.
+def _dim(text: str) -> str:
+    """Paint text grey inside a terminal line.
+
+    MCP gives no styling channel, and hosts paint every result line with their
+    own "tool output" colour, so the reasoning is dimmed with SGR codes that win
+    over the outer colour; the final reset must not leak into the answer.
     """
-    try:
-        meta = ctx.request_context.meta
-    except Exception:
-        return False
-    if not isinstance(meta, dict):
-        return False
-    # the framework normalises _meta.progressToken into meta["progress_token"]
-    return bool(meta.get("progress_token") or meta.get("progressToken"))
+    return "\n".join(f"{_GRAY}{line}{_RESET_FG}" if line else line for line in text.split("\n"))
 
 
 def _build_content(question: str, image_path: str | None) -> str | list[dict[str, object]]:
@@ -68,19 +65,15 @@ def _build_content(question: str, image_path: str | None) -> str | list[dict[str
 @server.tool()
 async def ask_deepseek(
     question: str,
-    ctx: Context,
     new_conversation: bool = False,
     image_path: str | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT,
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on.
-
-    When the caller supports progress notifications, the complete reasoning is
-    pushed once the moment the thinking phase ends (so it shows up before the
-    answer) and the result stays the bare answer. Callers without that channel
-    get the reasoning appended to the result instead: answer + <reasoning>.
+    Reasoning and web search are always on. The result is the reasoning chain
+    first (dimmed) and then the answer:
+    '<reasoning>...</reasoning>' + final answer.
     """
     async with _lock:
         if new_conversation:
@@ -99,20 +92,6 @@ async def ask_deepseek(
         answer_acc: list[str] = []
         tool_markup: list[str] = []
         error_text: str | None = None
-        notified = False
-        progress_delivered = _client_gets_progress(ctx)
-
-        async def _notify_reasoning() -> None:
-            """Push the complete reasoning once, as the thinking phase ends."""
-            nonlocal notified
-            if notified or not reasoning_acc or not progress_delivered:
-                return
-            notified = True
-            try:
-                text = "".join(reasoning_acc)
-                await ctx.report_progress(progress=float(len(text)), message=text)
-            except Exception:
-                pass  # notifications are best-effort
 
         async def _consume(client: httpx.AsyncClient) -> None:
             nonlocal error_text
@@ -149,7 +128,6 @@ async def ask_deepseek(
                         if delta.get("reasoning_content"):
                             reasoning_acc.append(delta["reasoning_content"])
                         if delta.get("content"):
-                            await _notify_reasoning()  # thinking finished, answer starts
                             answer_acc.append(delta["content"])
                         if delta.get("tool_calls"):
                             tool_markup.append(json.dumps(delta["tool_calls"], ensure_ascii=False))
@@ -163,7 +141,6 @@ async def ask_deepseek(
                 finally:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-                await _notify_reasoning()  # no answer deltas (e.g. empty response)
         except httpx.ConnectError:
             return f"Could not reach deepseek-local-server at {_settings.api_base_url}. Start `deepseek-local-server serve`."
         except httpx.TimeoutException:
@@ -176,9 +153,8 @@ async def ask_deepseek(
             _history.extend([user, {"role": "assistant", "content": answer}])
         answer = answer or "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
-        if reasoning_text and not progress_delivered:
-            # No notification channel: keep the chain in the result for the caller.
-            return f"{answer}\n\n---\n<reasoning>\n{reasoning_text}\n</reasoning>"
+        if reasoning_text:
+            return f"{_dim(f'<reasoning>\n{reasoning_text}\n</reasoning>')}\n\n{answer}"
         return answer
 
 

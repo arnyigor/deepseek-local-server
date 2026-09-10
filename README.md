@@ -26,7 +26,7 @@ CompletionService --> Direct DeepSeek Web API + PoW + true SSE
 - per-agent remote DeepSeek sessions (`x-agent-session` / `user`)
 - automatic session reset when the client history changes
 - basic OpenAI tool-call adapter
-- MCP `ask_deepseek`: always reasoning + web search; answer first, then the full reasoning chain in a `<reasoning>` block; images passed by local file path
+- MCP `ask_deepseek`: always reasoning + web search; result is the dimmed reasoning chain followed by the answer; images passed by local file path
 - basic Anthropic `/v1/messages` shim
 - basic OpenAI Responses `/v1/responses` shim
 - local bearer token is always required
@@ -139,11 +139,11 @@ ask_deepseek(
 
 Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
 
-Reasoning behavior: routing is automatic. If the caller sent a progress token (pi's proxy path does), the complete reasoning is pushed once as a progress notification the moment thinking ends — before the answer — and the result stays the bare answer. Callers without that channel (pi's direct-tools path) get the reasoning appended to the result instead: `answer\n\n---\n<reasoning>...</reasoning>`. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Reasoning behavior: the result carries the reasoning chain first, dimmed with SGR colour codes so it renders grey, then the answer on its own line — the answer keeps whatever colour the host paints tool output with. Nothing is sent as a progress notification (hosts place those outside the tool result, which puts the reasoning *below* the answer). Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
 ## Rendering in pi
 
-Every line of tool output is painted with the theme's `toolOutput` color (`gray` in the shipped dark theme), so an MCP answer looks gray next to white assistant messages. To make it white, copy `dark.json` from the pi install into `<agent-dir>/themes/`, set `colors.toolOutput` to `text`, and pick that theme with `/theme`.
+Every line of MCP tool output is painted with the theme's `toolOutput` colour (`gray` in the shipped dark theme). The reasoning block overrides that per line with SGR 90, so it stays grey; to make the answer itself white, copy `dark.json` from the pi install into `<agent-dir>/themes/`, set `colors.toolOutput` to `text`, and pick that theme with `/theme`.
 
 ## Diagnostics
 

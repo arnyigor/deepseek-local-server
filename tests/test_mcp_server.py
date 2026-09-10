@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from unittest.mock import AsyncMock
 
@@ -56,21 +57,18 @@ def bridge(monkeypatch):
     monkeypatch.setattr(mcp_server, "read_api_token", lambda _: "test-token")
     monkeypatch.setattr(mcp_server, "_history", [])
     monkeypatch.setattr(mcp_server, "_lock", asyncio.Lock())
-    ctx = AsyncMock()
-    # no progressToken -> the caller cannot receive progress notifications
-    ctx.request_context.meta = None
-    return requests, replies, ctx
+    return requests, replies
 
 
 def test_continuation_and_explicit_reset(bridge):
-    requests, replies, ctx = bridge
+    requests, replies = bridge
     replies.extend(["accepted", "BLUE-CAT-42", "new topic", "continued"])
 
     async def run():
-        assert await mcp_server.ask_deepseek("Remember BLUE-CAT-42", ctx) == "accepted"
-        assert await mcp_server.ask_deepseek("Which code?", ctx) == "BLUE-CAT-42"
-        assert await mcp_server.ask_deepseek("Hello", ctx, new_conversation=True) == "new topic"
-        assert await mcp_server.ask_deepseek("Continue", ctx) == "continued"
+        assert await mcp_server.ask_deepseek("Remember BLUE-CAT-42") == "accepted"
+        assert await mcp_server.ask_deepseek("Which code?") == "BLUE-CAT-42"
+        assert await mcp_server.ask_deepseek("Hello", new_conversation=True) == "new topic"
+        assert await mcp_server.ask_deepseek("Continue") == "continued"
 
     asyncio.run(run())
     assert requests[1]["messages"] == [
@@ -87,13 +85,13 @@ def test_continuation_and_explicit_reset(bridge):
 
 @pytest.mark.parametrize("failure", [503, httpx.ConnectError("offline"), httpx.ReadTimeout("slow"), None])
 def test_failed_call_does_not_pollute_history(bridge, failure):
-    requests, replies, ctx = bridge
+    requests, replies = bridge
     replies.extend(["first answer", failure, "retry answer"])
 
     async def run():
-        await mcp_server.ask_deepseek("first", ctx)
-        await mcp_server.ask_deepseek("failed question", ctx)
-        await mcp_server.ask_deepseek("retry", ctx)
+        await mcp_server.ask_deepseek("first")
+        await mcp_server.ask_deepseek("failed question")
+        await mcp_server.ask_deepseek("retry")
 
     asyncio.run(run())
     assert requests[2]["messages"] == [
@@ -104,26 +102,26 @@ def test_failed_call_does_not_pollute_history(bridge, failure):
 
 
 def test_failed_reset_does_not_restore_old_history(bridge):
-    requests, replies, ctx = bridge
+    requests, replies = bridge
     replies.extend(["old answer", 503, "fresh answer"])
 
     async def run():
-        await mcp_server.ask_deepseek("old question", ctx)
-        await mcp_server.ask_deepseek("new question", ctx, new_conversation=True)
-        await mcp_server.ask_deepseek("retry", ctx)
+        await mcp_server.ask_deepseek("old question")
+        await mcp_server.ask_deepseek("new question", new_conversation=True)
+        await mcp_server.ask_deepseek("retry")
 
     asyncio.run(run())
     assert requests[2]["messages"] == [{"role": "user", "content": "retry"}]
 
 
 def test_concurrent_calls_preserve_order(bridge):
-    requests, replies, ctx = bridge
+    requests, replies = bridge
     replies.extend(["first answer", "second answer"])
 
     async def run():
         await asyncio.gather(
-            mcp_server.ask_deepseek("first", ctx),
-            mcp_server.ask_deepseek("second", ctx),
+            mcp_server.ask_deepseek("first"),
+            mcp_server.ask_deepseek("second"),
         )
 
     asyncio.run(run())
@@ -134,12 +132,12 @@ def test_concurrent_calls_preserve_order(bridge):
 
 
 def test_model_is_always_reasoning_plus_search(bridge):
-    requests, replies, ctx = bridge
+    requests, replies = bridge
     replies.extend(["detailed", "searched"])
 
     async def run():
-        await mcp_server.ask_deepseek("first", ctx)
-        await mcp_server.ask_deepseek("continue", ctx)
+        await mcp_server.ask_deepseek("first")
+        await mcp_server.ask_deepseek("continue")
 
     asyncio.run(run())
     assert requests[0]["model"] == "deepseek-reasoner-search"
@@ -147,35 +145,38 @@ def test_model_is_always_reasoning_plus_search(bridge):
     assert len(requests[1]["messages"]) == 3
 
 
-def test_answer_comes_first_and_reasoning_is_appended(bridge):
-    requests, replies, ctx = bridge
+def _dimmed(text: str) -> str:
+    return "\n".join(f"\x1b[90m{line}\x1b[39m" if line else line for line in text.split("\n"))
+
+
+def test_reasoning_comes_first_dimmed_and_answer_last(bridge):
+    requests, replies = bridge
     replies.extend([
         {"deltas": [{"reasoning_content": "think"}, {"reasoning_content": "ing"}, {"content": "the answer"}]},
         {"deltas": [{"content": "next"}]},
     ])
 
     async def run():
-        result = await mcp_server.ask_deepseek("question", ctx)
-        assert result == "the answer\n\n---\n<reasoning>\nthinking\n</reasoning>"
-        again = await mcp_server.ask_deepseek("follow-up", ctx)
-        assert again == "next"  # no reasoning deltas this time -> nothing to append
+        result = await mcp_server.ask_deepseek("question")
+        assert result == f"{_dimmed('<reasoning>\nthinking\n</reasoning>')}\n\nthe answer"
+        assert result.endswith("the answer")  # answer keeps the host's normal colour
+        again = await mcp_server.ask_deepseek("follow-up")
+        assert again == "next"  # no reasoning deltas this time -> nothing to prepare
 
     asyncio.run(run())
     # history stores the clean answer, not the reasoning wrapper
     assert requests[1]["messages"][1] == {"role": "assistant", "content": "the answer"}
 
 
-def test_progress_capable_caller_gets_reasoning_once_and_a_bare_answer(bridge):
-    requests, replies, ctx = bridge
-    ctx.request_context.meta = {"progress_token": 7}
+def test_tool_takes_no_context_and_emits_no_notifications(bridge):
+    """The result carries the reasoning; hosts paint notifications outside the tool box."""
+    requests, replies = bridge
     replies.append({"deltas": [{"reasoning_content": "think"}, {"content": "the answer"}]})
 
     async def run():
-        result = await mcp_server.ask_deepseek("question", ctx)
-        assert result == "the answer"  # reasoning travelled by notification only
-        assert ctx.report_progress.await_count == 1
-        assert ctx.report_progress.await_args.kwargs["message"] == "think"
-        assert ctx.report_progress.await_args.kwargs["progress"] == 5.0
+        assert "ctx" not in inspect.signature(mcp_server.ask_deepseek).parameters
+        result = await mcp_server.ask_deepseek("question")
+        assert result == f"{_dimmed('<reasoning>\nthink\n</reasoning>')}\n\nthe answer"
 
     asyncio.run(run())
 
@@ -204,7 +205,7 @@ def test_cancellation_stops_request_without_updating_history(monkeypatch):
     monkeypatch.setattr(mcp_server, "_lock", asyncio.Lock())
 
     async def run():
-        task = asyncio.create_task(mcp_server.ask_deepseek("cancel me", AsyncMock()))
+        task = asyncio.create_task(mcp_server.ask_deepseek("cancel me"))
         await asyncio.wait_for(started.wait(), timeout=1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
