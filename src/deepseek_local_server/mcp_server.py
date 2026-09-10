@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import mimetypes
+import textwrap
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -43,6 +44,9 @@ NOTIFY_MAX_CHARS = 12_000
 # output from the head, which would eat the answer if the chain came first.
 RESULT_REASONING_HEAD_CHARS = 4_000
 RESULT_REASONING_TAIL_CHARS = 2_000
+
+# Long cells are wrapped inside the table so the box stays readable in an 80-column TUI.
+TABLE_MAX_COLUMN_CHARS = 34
 
 
 def _can_receive_progress(ctx: Context | None) -> bool:
@@ -85,6 +89,99 @@ def _dim(text: str) -> str:
     return "\n".join(f"{_GRAY}{line}{_RESET_FG}" if line else line for line in text.split("\n"))
 
 
+def _split_row(line: str) -> list[str]:
+    """Cells of a markdown table row, without the outer pipes or bold markers."""
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    return [cell.replace("**", "").replace("__", "") for cell in cells]
+
+
+def _is_table_separator(line: str) -> bool:
+    cells = _split_row(line)
+    return bool(cells) and all(set(cell) <= set("-: ") and "-" in cell for cell in cells)
+
+
+def _alignment(cell: str) -> str:
+    left, right = cell.startswith(":"), cell.endswith(":")
+    if left and right:
+        return "center"
+    if right:
+        return "right"
+    return "left"
+
+
+def _box_table(rows: list[str]) -> list[str]:
+    """Draw a markdown table as box-drawing art; hosts render results as plain text."""
+    header = _split_row(rows[0])
+    aligns = [_alignment(cell) for cell in _split_row(rows[1])]
+    body = [_split_row(row) for row in rows[2:]]
+
+    def cell(row: list[str], index: int) -> str:
+        return row[index] if index < len(row) else ""
+
+    columns = max(len(header), 1, *(len(row) for row in body)) if body else max(len(header), 1)
+    aligns += ["left"] * (columns - len(aligns))
+    widths = [
+        max(len(cell(header, i)), *(len(cell(row, i)) for row in body))
+        for i in range(columns)
+    ]
+    widths = [min(width, TABLE_MAX_COLUMN_CHARS) for width in widths]
+
+    def wrap(values: list[str]) -> list[list[str]]:
+        return [textwrap.wrap(cell(values, i), widths[i]) or [""] for i in range(columns)]
+
+    def pad(text: str, index: int) -> str:
+        width = widths[index]
+        if aligns[index] == "right":
+            return text.rjust(width)
+        if aligns[index] == "center":
+            return text.center(width)
+        return text.ljust(width)
+
+    def rule(left: str, joint: str, right: str) -> str:
+        return left + joint.join("─" * (width + 2) for width in widths) + right
+
+    def row(values: list[str]) -> list[str]:
+        wrapped = wrap(values)
+        height = max(len(cell_lines) for cell_lines in wrapped)
+        return [
+            "│ "
+            + " │ ".join(pad(cell_lines[k] if k < len(cell_lines) else "", i) for i, cell_lines in enumerate(wrapped))
+            + " │"
+            for k in range(height)
+        ]
+
+    lines = [rule("┌", "┬", "┐"), *row(header), rule("├", "┼", "┤")]
+    for values in body:
+        lines.extend(row(values))
+    lines.append(rule("└", "┴", "┘"))
+    return lines
+
+
+def _render_markdown(text: str) -> str:
+    """Turn markdown tables into box-drawing tables; other markdown stays as-is.
+
+    pi (and most MCP hosts) print tool results as literal text: a raw pipe table
+    wraps and loses its columns, while a bordered table survives any width.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        if lines[index].strip().startswith("|"):
+            block: list[str] = []
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                block.append(lines[index])
+                index += 1
+            if len(block) >= 2 and _is_table_separator(block[1]):
+                out.extend(_box_table(block))
+                continue
+            out.extend(block)
+            continue
+        out.append(lines[index])
+        index += 1
+    return "\n".join(out)
+
+
 def _build_content(question: str, image_path: str | None) -> str | list[dict[str, object]]:
     if not image_path:
         return question
@@ -113,8 +210,8 @@ async def ask_deepseek(
     accumulated so far is reported as progress messages (hosts that support
     progress show it live, e.g. pi's status line, updated in place). The result
     then carries a bounded slice of the chain (4k head + 2k tail plus an omitted-
-    chars marker), dimmed, followed by the answer. The chain is bounded so an
-    oversized result cannot push the answer out of the host's output limit.
+    chars marker), dimmed, followed by the answer. Markdown tables in the answer
+    are redrawn as box-drawing tables because hosts print results as plain text.
     """
     async with _lock:
         if new_conversation:
@@ -214,7 +311,7 @@ async def ask_deepseek(
         answer = "".join(answer_acc) or "".join(tool_markup)
         if answer:
             _history.extend([user, {"role": "assistant", "content": answer}])
-        answer = answer or "(DeepSeek returned an empty response)"
+        answer = _render_markdown(answer) if answer else "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
         if reasoning_text:
             block = f"<reasoning>\n{_trim_reasoning(reasoning_text)}\n</reasoning>"

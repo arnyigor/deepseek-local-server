@@ -170,6 +170,39 @@ def test_reasoning_comes_first_dimmed_and_answer_last(bridge):
     assert requests[1]["messages"][1] == {"role": "assistant", "content": "the answer"}
 
 
+def test_markdown_tables_become_box_drawing_tables(bridge):
+    requests, replies, ctx = bridge
+    table = [
+        "| Поезд | Плацкарт, ₽ | Купе, ₽ |",
+        "| :--- | ---: | ---: |",
+        "| 002Й | 1 916 | 2 220 |",
+    ]
+    replies.append({"deltas": [{"content": "\n".join(table)}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        lines = result.split("\n")
+        assert lines[0].startswith("┌")
+        assert lines[0].endswith("┐")
+        assert "│ Поезд" in lines[1] and "│ 002Й" in lines[3]
+        assert "       1 916 │" in lines[3]  # right-aligned numeric column
+        assert lines[-1].startswith("└")
+        assert "|" not in result  # no raw pipes left over
+
+    asyncio.run(run())
+
+
+def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
+    requests, replies, ctx = bridge
+    replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert result == "| not a table\nsecond line"
+
+    asyncio.run(run())
+
+
 def test_no_ticker_without_a_progress_token(bridge):
     """Direct-tool callers cannot receive progress, so nothing is sent but the result."""
     requests, replies, ctx = bridge
