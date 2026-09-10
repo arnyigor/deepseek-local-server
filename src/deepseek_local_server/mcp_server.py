@@ -4,8 +4,8 @@ import asyncio
 import base64
 import json
 import mimetypes
-import textwrap
 import time
+import unicodedata
 from pathlib import Path
 from uuid import uuid4
 
@@ -90,10 +90,40 @@ def _dim(text: str) -> str:
     return "\n".join(f"{_GRAY}{line}{_RESET_FG}" if line else line for line in text.split("\n"))
 
 
+def _char_width(char: str) -> int:
+    """Terminal cells occupied by one character (CJK and emoji take two)."""
+    if unicodedata.combining(char):
+        return 0
+    return 2 if unicodedata.east_asian_width(char) in {"W", "F"} else 1
+
+
+def _display_width(text: str) -> int:
+    return sum(_char_width(char) for char in text)
+
+
 def _split_row(line: str) -> list[str]:
-    """Cells of a markdown table row, without the outer pipes or bold markers."""
-    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-    return [cell.replace("**", "").replace("__", "") for cell in cells]
+    """Cells of a markdown table row; handles escaped pipes and drops bold markers."""
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|") and not body.endswith("\\|"):
+        body = body[:-1]
+    cells: list[str] = []
+    current = ""
+    escaped = False
+    for char in body:
+        if escaped:
+            current += char
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "|":
+            cells.append(current)
+            current = ""
+        else:
+            current += char
+    cells.append(current)
+    return [cell.strip().replace("**", "").replace("__", "") for cell in cells]
 
 
 def _is_table_separator(line: str) -> bool:
@@ -110,6 +140,39 @@ def _alignment(cell: str) -> str:
     return "left"
 
 
+def _take_width(text: str, limit: int) -> tuple[str, str]:
+    """Split text so the head fits the limit in terminal cells."""
+    used = 0
+    for index, char in enumerate(text):
+        width = _char_width(char)
+        if used + width > limit:
+            return text[:index], text[index:]
+        used += width
+    return text, ""
+
+
+def _wrap_cell(text: str, limit: int) -> list[str]:
+    """Greedy word wrap measured in terminal cells."""
+    if _display_width(text) <= limit:
+        return [text]
+    lines: list[str] = []
+    current = ""
+    for word in text.split(" "):
+        candidate = f"{current} {word}".strip()
+        if _display_width(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        while _display_width(word) > limit:
+            piece, word = _take_width(word, limit)
+            lines.append(piece)
+        current = word
+    if current or not lines:
+        lines.append(current)
+    return lines
+
+
 def _box_table(rows: list[str]) -> list[str]:
     """Draw a markdown table as box-drawing art; hosts render results as plain text."""
     header = _split_row(rows[0])
@@ -122,7 +185,7 @@ def _box_table(rows: list[str]) -> list[str]:
     columns = max(len(header), 1, *(len(row) for row in body)) if body else max(len(header), 1)
     aligns += ["left"] * (columns - len(aligns))
     widths = [
-        max(len(cell(header, i)), *(len(cell(row, i)) for row in body))
+        max(_display_width(cell(header, i)), *(_display_width(cell(row, i)) for row in body))
         for i in range(columns)
     ]
     widths = [min(width, TABLE_MAX_COLUMN_CHARS) for width in widths]
@@ -135,15 +198,16 @@ def _box_table(rows: list[str]) -> list[str]:
         widths[widths.index(max(widths))] -= 1
 
     def wrap(values: list[str]) -> list[list[str]]:
-        return [textwrap.wrap(cell(values, i), widths[i]) or [""] for i in range(columns)]
+        return [_wrap_cell(cell(values, i), widths[i]) for i in range(columns)]
 
     def pad(text: str, index: int) -> str:
-        width = widths[index]
+        gap = max(0, widths[index] - _display_width(text))
         if aligns[index] == "right":
-            return text.rjust(width)
+            return " " * gap + text
         if aligns[index] == "center":
-            return text.center(width)
-        return text.ljust(width)
+            left = gap // 2
+            return " " * left + text + " " * (gap - left)
+        return text + " " * gap
 
     def rule(left: str, joint: str, right: str) -> str:
         return left + joint.join("─" * (width + 2) for width in widths) + right
@@ -174,8 +238,15 @@ def _render_markdown(text: str) -> str:
     lines = text.split("\n")
     out: list[str] = []
     index = 0
+    in_fence = False
     while index < len(lines):
-        if lines[index].strip().startswith("|"):
+        stripped = lines[index].strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            out.append(lines[index])
+            index += 1
+            continue
+        if not in_fence and stripped.startswith("|"):
             block: list[str] = []
             while index < len(lines) and lines[index].strip().startswith("|"):
                 block.append(lines[index])

@@ -210,6 +210,43 @@ def test_table_box_stays_within_the_width_budget(bridge):
     asyncio.run(run())
 
 
+def test_table_inside_a_code_fence_is_left_alone(bridge):
+    requests, replies, ctx = bridge
+    fenced = "```\n| a | b |\n|---|---|\n| 1 | 2 |\n```"
+    replies.append({"deltas": [{"content": fenced}]})
+
+    async def run():
+        assert await mcp_server.ask_deepseek("question", ctx) == fenced
+
+    asyncio.run(run())
+
+
+def test_escaped_pipe_stays_inside_one_cell(bridge):
+    requests, replies, ctx = bridge
+    replies.append({"deltas": [{"content": "| Выражение | Значение |\n|---|---|\n| a \\| b | 1 |"}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        rows = [line for line in result.split("\n") if line]
+        assert all(row.count("│") == 3 for row in rows)  # two columns, one escaped pipe kept inside
+        assert "a | b" in result
+
+    asyncio.run(run())
+
+
+def test_wide_characters_keep_the_box_aligned(bridge):
+    requests, replies, ctx = bridge
+    table = "| 名前 | Флаг | Значение |\n|---|---|---|\n| 中文 | 🚀 | 1 |\n| ab | x | 2 |"
+    replies.append({"deltas": [{"content": table}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        widths = {mcp_server._display_width(line) for line in result.split("\n") if line}
+        assert len(widths) == 1  # every row occupies the same number of cells
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})
