@@ -109,11 +109,12 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on. While the model thinks, the running
-    reasoning is reported as progress messages (hosts that support progress show
-    it live, e.g. pi's status line). The result then carries the whole chain
-    first (dimmed) and the answer last:
-    '<reasoning>...</reasoning>' + final answer.
+    Reasoning and web search are always on. While the model thinks, the reasoning
+    accumulated so far is reported as progress messages (hosts that support
+    progress show it live, e.g. pi's status line, updated in place). The result
+    then carries a bounded slice of the chain (4k head + 2k tail plus an omitted-
+    chars marker), dimmed, followed by the answer. The chain is bounded so an
+    oversized result cannot push the answer out of the host's output limit.
     """
     async with _lock:
         if new_conversation:
