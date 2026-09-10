@@ -144,7 +144,7 @@ def test_model_is_always_reasoning_plus_search(bridge):
     assert len(requests[1]["messages"]) == 3
 
 
-def test_streamed_reasoning_is_returned_but_history_keeps_clean_answer(bridge):
+def test_reasoning_is_always_returned_but_history_keeps_clean_answer(bridge):
     requests, replies, ctx = bridge
     replies.extend([
         {"deltas": [{"reasoning_content": "think"}, {"reasoning_content": "ing"}, {"content": "the answer"}]},
@@ -154,8 +154,8 @@ def test_streamed_reasoning_is_returned_but_history_keeps_clean_answer(bridge):
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
         assert result.startswith("<reasoning>\nthinking\n</reasoning>\n\nthe answer")
-        bare = await mcp_server.ask_deepseek("follow-up", ctx, include_reasoning=False)
-        assert bare == "next"
+        again = await mcp_server.ask_deepseek("follow-up", ctx)
+        assert again == "next"  # no reasoning deltas this time -> nothing to wrap
 
     asyncio.run(run())
     # history stores the clean answer, not the <reasoning> wrapper

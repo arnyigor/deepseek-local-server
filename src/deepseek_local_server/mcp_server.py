@@ -55,7 +55,6 @@ async def ask_deepseek(
     ctx: Context,
     new_conversation: bool = False,
     image_path: str | None = None,
-    include_reasoning: bool = True,
     timeout_seconds: float = _DEFAULT_TIMEOUT,
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
@@ -63,7 +62,6 @@ async def ask_deepseek(
     Reasoning and web search are always on. The returned text carries the whole
     reasoning chain as one block before the answer:
     <reasoning>...</reasoning> + final answer.
-    Pass include_reasoning=False to get the bare answer only.
     """
     async with _lock:
         if new_conversation:
@@ -143,7 +141,7 @@ async def ask_deepseek(
             _history.extend([user, {"role": "assistant", "content": answer}])
         answer = answer or "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
-        if include_reasoning and reasoning_text:
+        if reasoning_text:
             return f"<reasoning>\n{reasoning_text}\n</reasoning>\n\n{answer}"
         return answer
 

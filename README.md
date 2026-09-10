@@ -133,12 +133,11 @@ ask_deepseek(
   question,
   new_conversation=false,  # clear MCP-side history before this call
   image_path=None,         # local image file, e.g. "C:/pics/photo.jpg" (vision)
-  include_reasoning=True,  # false = return the bare answer only
   timeout_seconds=<request timeout + 30>
 )
 ```
 
-Reasoning and web search are always on (`deepseek-reasoner-search`); there are no mode toggles.
+Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
 
 Reasoning behavior: the tool returns the complete reasoning chain as one `<reasoning>...</reasoning>` block followed by the answer (no chunked progress updates). Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
 
