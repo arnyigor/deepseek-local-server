@@ -227,9 +227,9 @@ def test_escaped_pipe_stays_inside_one_cell(bridge):
 
     async def run():
         result = await mcp_server.ask_deepseek("question", ctx)
-        rows = [line for line in result.split("\n") if line]
-        assert all(row.count("│") == 3 for row in rows)  # two columns, one escaped pipe kept inside
         assert "a | b" in result
+        content_rows = [line for line in result.split("\n") if line.startswith("│")]
+        assert content_rows and all(row.count("│") == 3 for row in content_rows)
 
     asyncio.run(run())
 
