@@ -314,7 +314,7 @@ def test_inline_math_is_cleaned_but_prices_are_not(bridge):
         result = await mcp_server.ask_deepseek("question", ctx)
         assert "g₀ ≈ 9,8" in result  # inline math delimiters dropped
         assert "$5 или $10" in result  # prices survive untouched
-        assert "ln(m₀/m_f)" in result and "max(a,b)" in result
+        assert "ln(m₀/mf)" in result and "max(a,b)" in result
 
     asyncio.run(run())
 

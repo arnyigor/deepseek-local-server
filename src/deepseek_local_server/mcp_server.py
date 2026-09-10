@@ -294,7 +294,16 @@ SUBSCRIPT = str.maketrans("0123456789+-aehijklmnoprstuvx", "₀₁₂₃₄₅�
 
 
 def _script(body: str, table: dict[int, str]) -> str:
-    return body.lower().translate(table) if _is_scriptable(body, table) else f"({body})"
+    if _is_scriptable(body, table):
+        return body.lower().translate(table)
+    if len(body) == 1:
+        return body  # no Unicode form (e.g. subscript f): just attach the letter
+    return f"({body})"
+
+
+def _superscript(body: str) -> str:
+    """Superscripts that Unicode cannot express keep the explicit form: e^x -> e^(-x)."""
+    return body.lower().translate(SUPERSCRIPT) if _is_scriptable(body, SUPERSCRIPT) else f"({body})"
 
 
 def _is_scriptable(body: str, table: dict[int, str]) -> bool:
@@ -313,14 +322,14 @@ def _render_math(text: str) -> str:
     text = re.sub(r"\\hspace\s*\{[^{}]*\}", " ", text)
     text = re.sub(r"\\(?:begin|end)\s*\{[^{}]*\}", "", text)
     text = re.sub(r"\\\s", " ", text)  # \ followed by whitespace is a plain space
-    text = re.sub(r"\^\{([^{}]*)\}", lambda m: _script(m.group(1), SUPERSCRIPT), text)
+    text = re.sub(r"\^\{([^{}]*)\}", lambda m: _superscript(m.group(1)), text)
     text = re.sub(r"_\{([^{}]*)\}", lambda m: _script(m.group(1), SUBSCRIPT), text)
-    text = re.sub(r"\^([0-9n])", lambda m: _script(m.group(1), SUPERSCRIPT), text)
+    text = re.sub(r"\^([0-9n])", lambda m: _superscript(m.group(1)), text)
     text = re.sub(
         r"(?<=[A-Za-z0-9)])([_^])([0-9a-z])\b",
-        lambda m: m.group(0)
-        if not _is_scriptable(m.group(2), SUPERSCRIPT if m.group(1) == "^" else SUBSCRIPT)
-        else _script(m.group(2), SUPERSCRIPT if m.group(1) == "^" else SUBSCRIPT),
+        lambda m: _script(m.group(2), SUBSCRIPT)
+        if m.group(1) == "_"
+        else _superscript(m.group(2)),
         text,
     )
     text = re.sub(r"\\([A-Za-z]+)", lambda m: LATEX_SYMBOLS.get(m.group(1), m.group(0)), text)
