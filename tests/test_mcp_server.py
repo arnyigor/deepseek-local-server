@@ -192,6 +192,24 @@ def test_markdown_tables_become_box_drawing_tables(bridge):
     asyncio.run(run())
 
 
+def test_table_box_stays_within_the_width_budget(bridge):
+    requests, replies, ctx = bridge
+    table = "\n".join(
+        [
+            "| Параметр | Значение |",
+            "| --- | --- |",
+            f"| длинное описание параметра | {'x' * 120} |",
+        ]
+    )
+    replies.append({"deltas": [{"content": table}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert max(len(line) for line in result.split("\n")) <= mcp_server.TABLE_MAX_WIDTH_CHARS
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})
@@ -250,7 +268,8 @@ def test_ticker_streams_reasoning_when_the_caller_supports_progress(bridge):
         messages = [call.kwargs["message"] for call in ctx.report_progress.await_args_list]
         assert all(m.startswith("thinking:") for m in messages)
         assert "second thought" in messages[-1]  # newest slice is reported
-        assert result == f"{_dimmed('<reasoning>\nfirst thought second thought\n</reasoning>')}\n\nthe answer"
+        # the chain travelled by ticker, so the result must be the bare answer
+        assert result == "the answer"
 
     asyncio.run(run())
 

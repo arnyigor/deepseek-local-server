@@ -45,8 +45,9 @@ NOTIFY_MAX_CHARS = 12_000
 RESULT_REASONING_HEAD_CHARS = 4_000
 RESULT_REASONING_TAIL_CHARS = 2_000
 
-# Long cells are wrapped inside the table so the box stays readable in an 80-column TUI.
+# Long cells are wrapped inside the table so the box stays readable in a narrow TUI.
 TABLE_MAX_COLUMN_CHARS = 34
+TABLE_MAX_WIDTH_CHARS = 98
 
 
 def _can_receive_progress(ctx: Context | None) -> bool:
@@ -125,6 +126,13 @@ def _box_table(rows: list[str]) -> list[str]:
         for i in range(columns)
     ]
     widths = [min(width, TABLE_MAX_COLUMN_CHARS) for width in widths]
+
+    def table_width() -> int:
+        return sum(widths) + 3 * columns + 1
+
+    # shrink the widest column until the whole box fits the budget
+    while table_width() > TABLE_MAX_WIDTH_CHARS and max(widths) > 10:
+        widths[widths.index(max(widths))] -= 1
 
     def wrap(values: list[str]) -> list[list[str]]:
         return [textwrap.wrap(cell(values, i), widths[i]) or [""] for i in range(columns)]
@@ -207,11 +215,14 @@ async def ask_deepseek(
     """Ask DeepSeek Web through the local gateway.
 
     Reasoning and web search are always on. While the model thinks, the reasoning
-    accumulated so far is reported as progress messages (hosts that support
-    progress show it live, e.g. pi's status line, updated in place). The result
-    then carries a bounded slice of the chain (4k head + 2k tail plus an omitted-
-    chars marker), dimmed, followed by the answer. Markdown tables in the answer
-    are redrawn as box-drawing tables because hosts print results as plain text.
+    accumulated so far is reported as progress messages, so hosts that support
+    progress show it live (pi replaces its status line in place). Hosts that
+    cannot receive progress get the chain inside the result instead — a bounded
+    slice (4k head + 2k tail plus an omitted-chars marker), dimmed.
+
+    The result itself is the answer, with markdown tables redrawn as box-drawing
+    tables because hosts print results as literal text (and may show only the
+    first lines, so the answer has to come first).
     """
     async with _lock:
         if new_conversation:
@@ -313,7 +324,8 @@ async def ask_deepseek(
             _history.extend([user, {"role": "assistant", "content": answer}])
         answer = _render_markdown(answer) if answer else "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
-        if reasoning_text:
+        if reasoning_text and not live:
+            # No progress channel at all: the result must carry the chain itself.
             block = f"<reasoning>\n{_trim_reasoning(reasoning_text)}\n</reasoning>"
             return f"{_dim(block)}\n\n{answer}"
         return answer
