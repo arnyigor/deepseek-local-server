@@ -291,6 +291,8 @@ LATEX_SYMBOLS = {
 }
 SUPERSCRIPT = str.maketrans("0123456789+-n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ")
 SUBSCRIPT = str.maketrans("0123456789+-aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")
+# only known commands are substituted, longest name first: \ln must still match in "\lnm"
+_LATEX_COMMAND_RE = re.compile("\\\\(" + "|".join(sorted(map(re.escape, LATEX_SYMBOLS), key=len, reverse=True)) + ")")
 
 
 def _script(body: str, table: dict[int, str]) -> str:
@@ -312,8 +314,18 @@ def _is_scriptable(body: str, table: dict[int, str]) -> bool:
 
 def _render_math(text: str) -> str:
     """Turn common LaTeX into readable Unicode; unknown commands are kept verbatim."""
-    for _ in range(4):  # innermost fractions first
-        text = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1/\2", text)
+    for _ in range(4):  # innermost fractions first, one level of nested braces allowed
+        # a fraction glued to a function name keeps the grouping: \ln\frac{a}{b} -> ln(a/b)
+        text = re.sub(
+            r"(?<=[A-Za-z0-9)])\\frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+            r"(\1/\2)",
+            text,
+        )
+        text = re.sub(
+            r"\\frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+            r"\1/\2",
+            text,
+        )
     text = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"√(\1)", text)
     text = re.sub(r"\\(?:text|mathrm|operatorname)\s*\{([^{}]*)\}", r"\1", text)
     text = re.sub(r"\\(?:left|right|displaystyle)\s*", "", text)
@@ -332,7 +344,7 @@ def _render_math(text: str) -> str:
         else _superscript(m.group(2)),
         text,
     )
-    text = re.sub(r"\\([A-Za-z]+)", lambda m: LATEX_SYMBOLS.get(m.group(1), m.group(0)), text)
+    text = _LATEX_COMMAND_RE.sub(lambda m: LATEX_SYMBOLS[m.group(1)], text)
     return re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", text))
 
 
