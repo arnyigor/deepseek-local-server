@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import mimetypes
-import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -26,7 +25,7 @@ server = MCPServer(
         "Use DeepSeek Web as a second-opinion/research model through a local gateway. "
         "All requests go through the direct DeepSeek Web API. "
         "DeepSeek merged its Instant/Expert/Vision modes into a single model (2026-09); "
-        "reasoning and web search are always on and reasoning is streamed back to the caller. "
+        "reasoning and web search are always on and the full reasoning is returned with the answer. "
         "The merged model natively understands images: pass image_path to a local "
         "image file to ask about it. Pass all required context in the question."
     ),
@@ -61,9 +60,8 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on. Reasoning streams to the client via
-    progress notifications (message carries the accumulated reasoning tail) and
-    is included in the returned text before the answer:
+    Reasoning and web search are always on. The returned text carries the whole
+    reasoning chain as one block before the answer:
     <reasoning>...</reasoning> + final answer.
     Pass include_reasoning=False to get the bare answer only.
     """
@@ -84,20 +82,6 @@ async def ask_deepseek(
         answer_acc: list[str] = []
         tool_markup: list[str] = []
         error_text: str | None = None
-        state = {"last_emit": time.monotonic(), "reasoning_flushed": False}
-
-        async def _emit(text: str, *, force: bool = False) -> None:
-            """Push the visible tail of streamed text to the MCP client."""
-            now = time.monotonic()
-            if not force and now - state["last_emit"] < 1.0:
-                return
-            state["last_emit"] = now
-            tail = text[-500:]
-            try:
-                await ctx.report_progress(progress=float(len(text)), message=tail)
-                await ctx.info(tail)
-            except Exception:
-                pass  # notifications are best-effort
 
         async def _consume(client: httpx.AsyncClient) -> None:
             nonlocal error_text
@@ -133,11 +117,7 @@ async def ask_deepseek(
                         delta = choices[0].get("delta") or {}
                         if delta.get("reasoning_content"):
                             reasoning_acc.append(delta["reasoning_content"])
-                            await _emit("".join(reasoning_acc), force=len(reasoning_acc) == 1)
                         if delta.get("content"):
-                            if reasoning_acc and not state["reasoning_flushed"]:
-                                state["reasoning_flushed"] = True
-                                await _emit("".join(reasoning_acc), force=True)  # final flush of short reasoning
                             answer_acc.append(delta["content"])
                         if delta.get("tool_calls"):
                             tool_markup.append(json.dumps(delta["tool_calls"], ensure_ascii=False))
@@ -146,12 +126,7 @@ async def ask_deepseek(
             async with httpx.AsyncClient(timeout=timeout_seconds + 10) as client:
                 task = asyncio.create_task(_consume(client))
                 try:
-                    while not task.done():
-                        done, _ = await asyncio.wait({task}, timeout=5)
-                        if done:
-                            break
-                        if time.monotonic() - state["last_emit"] >= 5:
-                            await _emit("".join(reasoning_acc) or "Waiting for DeepSeek...", force=True)
+                    await asyncio.wait({task})
                     task.result()
                 finally:
                     task.cancel()
