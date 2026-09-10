@@ -32,8 +32,12 @@ def _sse(reply) -> httpx.Response:
         raise reply
     if isinstance(reply, int):
         return httpx.Response(reply, text="test failure")
-    event = json.dumps({"choices": [{"delta": {"content": reply}, "finish_reason": None}]})
-    return httpx.Response(200, text=f"data: {event}\n\ndata: [DONE]\n\n")
+    if isinstance(reply, dict):
+        deltas = reply["deltas"]
+    else:
+        deltas = [{"content": reply}]
+    events = [json.dumps({"choices": [{"delta": d, "finish_reason": None}]}) for d in deltas]
+    return httpx.Response(200, text="".join(f"data: {e}\n\n" for e in events) + "data: [DONE]\n\n")
 
 
 @pytest.fixture
@@ -138,6 +142,24 @@ def test_reasoning_and_search_are_forwarded_per_call_without_resetting_history(b
     assert requests[0]["model"] == "deepseek-chat"
     assert requests[1]["model"] == "deepseek-reasoner-search"
     assert len(requests[1]["messages"]) == 3
+
+
+def test_streamed_reasoning_is_returned_but_history_keeps_clean_answer(bridge):
+    requests, replies, ctx = bridge
+    replies.extend([
+        {"deltas": [{"reasoning_content": "think"}, {"reasoning_content": "ing"}, {"content": "the answer"}]},
+        {"deltas": [{"content": "next"}]},
+    ])
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert result.startswith("<reasoning>\nthinking\n</reasoning>\n\nthe answer")
+        bare = await mcp_server.ask_deepseek("follow-up", ctx, include_reasoning=False)
+        assert bare == "next"
+
+    asyncio.run(run())
+    # history stores the clean answer, not the <reasoning> wrapper
+    assert requests[1]["messages"][1] == {"role": "assistant", "content": "the answer"}
 
 
 def test_cancellation_stops_request_without_updating_history(monkeypatch):

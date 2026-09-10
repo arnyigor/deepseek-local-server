@@ -61,13 +61,15 @@ async def ask_deepseek(
     search: bool = False,
     new_conversation: bool = False,
     image_path: str | None = None,
+    include_reasoning: bool = True,
     timeout_seconds: float = _DEFAULT_TIMEOUT,
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning streams live to the client via progress notifications (message
-    carries the accumulated reasoning tail) and MCP log messages; the returned
-    value stays the clean final answer.
+    Reasoning streams to the client via progress notifications (message
+    carries the accumulated reasoning tail) and is included in the returned
+    text before the answer: <reasoning>...</reasoning> + final answer.
+    Pass include_reasoning=False to get the bare answer only.
     """
     async with _lock:
         if new_conversation:
@@ -168,7 +170,11 @@ async def ask_deepseek(
         answer = "".join(answer_acc) or "".join(tool_markup)
         if answer:
             _history.extend([user, {"role": "assistant", "content": answer}])
-        return answer or "(DeepSeek returned an empty response)"
+        answer = answer or "(DeepSeek returned an empty response)"
+        reasoning_text = "".join(reasoning_acc)
+        if include_reasoning and reasoning_text:
+            return f"<reasoning>\n{reasoning_text}\n</reasoning>\n\n{answer}"
+        return answer
 
 
 def main() -> None:
