@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -22,7 +25,8 @@ server = MCPServer(
         "The direct Web API is primary and browser automation is only a fallback. "
         "DeepSeek merged its Instant/Expert/Vision modes into a single model (2026-09); "
         "there is no model choice left, only 'reasoning' and 'search' toggles. "
-        "Pass all required context in the question."
+        "The merged model natively understands images: pass image_path to a local "
+        "image file to ask about it. Pass all required context in the question."
     ),
 )
 
@@ -33,6 +37,20 @@ def _model(reasoning: bool, search: bool) -> str:
     return "deepseek-reasoner" if reasoning else "deepseek-chat"
 
 
+def _build_content(question: str, image_path: str | None) -> str | list[dict[str, object]]:
+    if not image_path:
+        return question
+    path = Path(image_path)
+    if not path.is_file():
+        raise ValueError(f"image_path does not exist: {image_path}")
+    mime = mimetypes.guess_type(path.name)[0] or "image/png"
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return [
+        {"type": "text", "text": question},
+        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{data}"}},
+    ]
+
+
 @server.tool()
 async def ask_deepseek(
     question: str,
@@ -40,6 +58,7 @@ async def ask_deepseek(
     reasoning: bool = True,
     search: bool = False,
     new_conversation: bool = False,
+    image_path: str | None = None,
     timeout_seconds: float = _DEFAULT_TIMEOUT,
 ) -> str:
     """Ask DeepSeek Web through the local gateway."""
@@ -49,10 +68,11 @@ async def ask_deepseek(
         try:
             model = _model(reasoning, search)
             token = read_api_token(_settings)
+            content = _build_content(question, image_path)
         except Exception as exc:
             return f"deepseek-local-server configuration error: {exc}"
 
-        user = {"role": "user", "content": question}
+        user = {"role": "user", "content": content}
         messages = [*_history, user]
         task = asyncio.create_task(_post(model, messages, token, timeout_seconds))
         elapsed = 0.0

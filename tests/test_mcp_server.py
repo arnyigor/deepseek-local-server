@@ -8,6 +8,24 @@ import pytest
 from deepseek_local_server import mcp_server
 
 
+def test_build_content_without_image_is_plain_string():
+    assert mcp_server._build_content("hello", None) == "hello"
+
+
+def test_build_content_with_image_embeds_base64_data_url(tmp_path):
+    image = tmp_path / "shot.png"
+    image.write_bytes(b"\x89PNG\r\n\x1a\nfake-bytes")
+    content = mcp_server._build_content("what is this?", str(image))
+    assert content[0] == {"type": "text", "text": "what is this?"}
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_build_content_rejects_missing_image_path():
+    with pytest.raises(ValueError):
+        mcp_server._build_content("q", "/no/such/file.png")
+
+
 @pytest.fixture
 def bridge(monkeypatch):
     requests = []
