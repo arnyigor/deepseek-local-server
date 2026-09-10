@@ -130,16 +130,16 @@ def test_concurrent_calls_preserve_order(bridge):
     ]
 
 
-def test_reasoning_and_search_are_forwarded_per_call_without_resetting_history(bridge):
+def test_models_are_always_reasoning_and_search_is_forwarded_per_call(bridge):
     requests, replies, ctx = bridge
-    replies.extend(["fast", "detailed"])
+    replies.extend(["detailed", "searched"])
 
     async def run():
-        await mcp_server.ask_deepseek("first", ctx, reasoning=False)
+        await mcp_server.ask_deepseek("first", ctx)
         await mcp_server.ask_deepseek("continue", ctx, search=True)
 
     asyncio.run(run())
-    assert requests[0]["model"] == "deepseek-chat"
+    assert requests[0]["model"] == "deepseek-reasoner"
     assert requests[1]["model"] == "deepseek-reasoner-search"
     assert len(requests[1]["messages"]) == 3
 

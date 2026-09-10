@@ -26,17 +26,15 @@ server = MCPServer(
         "Use DeepSeek Web as a second-opinion/research model through a local gateway. "
         "All requests go through the direct DeepSeek Web API. "
         "DeepSeek merged its Instant/Expert/Vision modes into a single model (2026-09); "
-        "there is no model choice left, only 'reasoning' and 'search' toggles. "
+        "reasoning is always on and is streamed back to the caller, only 'search' remains a toggle. "
         "The merged model natively understands images: pass image_path to a local "
         "image file to ask about it. Pass all required context in the question."
     ),
 )
 
 
-def _model(reasoning: bool, search: bool) -> str:
-    if search:
-        return "deepseek-reasoner-search" if reasoning else "deepseek-chat-search"
-    return "deepseek-reasoner" if reasoning else "deepseek-chat"
+def _model(search: bool) -> str:
+    return "deepseek-reasoner-search" if search else "deepseek-reasoner"
 
 
 def _build_content(question: str, image_path: str | None) -> str | list[dict[str, object]]:
@@ -57,7 +55,6 @@ def _build_content(question: str, image_path: str | None) -> str | list[dict[str
 async def ask_deepseek(
     question: str,
     ctx: Context,
-    reasoning: bool = True,
     search: bool = False,
     new_conversation: bool = False,
     image_path: str | None = None,
@@ -66,16 +63,16 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning streams to the client via progress notifications (message
-    carries the accumulated reasoning tail) and is included in the returned
-    text before the answer: <reasoning>...</reasoning> + final answer.
+    Reasoning is always on. It streams to the client via progress notifications
+    (message carries the accumulated reasoning tail) and is included in the
+    returned text before the answer: <reasoning>...</reasoning> + final answer.
     Pass include_reasoning=False to get the bare answer only.
     """
     async with _lock:
         if new_conversation:
             _history.clear()
         try:
-            model = _model(reasoning, search)
+            model = _model(search)
             token = read_api_token(_settings)
             content = _build_content(question, image_path)
         except Exception as exc:

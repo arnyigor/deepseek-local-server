@@ -131,8 +131,7 @@ MCP tool:
 ```text
 ask_deepseek(
   question,
-  reasoning=true,          # deepseek-reasoner vs deepseek-chat
-  search=false,            # *-search model variant
+  search=false,            # *-search model variant; reasoning is always on
   new_conversation=false,  # clear MCP-side history before this call
   image_path=None,         # local image file, e.g. "C:/pics/photo.jpg" (vision)
   include_reasoning=True,  # false = return the bare answer only
