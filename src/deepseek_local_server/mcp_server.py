@@ -357,6 +357,7 @@ def _strip_markers(text: str) -> str:
     text = re.sub(r"\\\[(.*?)\\\]", r"\1", text)
     text = re.sub(r"\$\$(.+?)\$\$", r"\1", text)
     # inline $math$: only when it looks like math, so prices are left alone
+    text = re.sub(r"\$([A-Za-z])\$", r"\1", text)
     text = re.sub(r"\$(?=[^$]*?[\\_^{}])([^$]+)\$", r"\1", text)
     return _render_math(text)
 
@@ -373,6 +374,92 @@ def _clean_line(line: str) -> str:
     return _clean_inline(line)
 
 
+def _strip_outer_braces(cell: str) -> str:
+    r"""{$R$, \si{m}} -> $R$, \si{m} (LaTeX grouping around a whole cell)."""
+    while cell.startswith("{") and cell.endswith("}"):
+        cell = cell[1:-1].strip()
+    return cell
+
+
+def _tabular_to_markdown(body: str) -> str:
+    """LaTeX tabular -> markdown pipe rows, so the box renderer can take over."""
+    body = re.sub(r"\\(?:top|mid|bottom)rule|\\(?:hline|cline)\s*(?:\{[^{}]*\})?", "", body)
+    body = re.sub(r"(?<![A-Za-z])\{([^{}]*)\}", r"\1", body)  # cell grouping braces, not command args
+    rows = [row for row in re.split(r"\\\\", body) if row.strip()]
+    cells = [[_strip_outer_braces(cell.strip()) for cell in row.split("&")] for row in rows]
+    if not cells:
+        return ""
+    columns = max(len(row) for row in cells)
+    lines = ["| " + " | ".join(row + [""] * (columns - len(row))) + " |" for row in cells]
+    lines.insert(1, "| " + " | ".join(["---"] * columns) + " |")
+    return "\n".join(lines)
+
+
+def _latex_body_to_markdown(lines: list[str]) -> list[str]:
+    """Reduce a pasted LaTeX document to renderable markdown-ish text."""
+    text = "\n".join(lines)
+    if "\\begin{document}" in text:
+        text = text.split("\\begin{document}", 1)[1]
+    text = text.split("\\end{document}", 1)[0]
+    text = re.sub(
+        r"\\begin\{tabular\}(?:\{[^{}]*\})?(.*?)\\end\{tabular\}",
+        lambda m: f"\n{_tabular_to_markdown(m.group(1))}\n",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r"\\(?:documentclass|usepackage|begin|end|noindent|medskip|bigskip|smallskip"
+        r"|maketitle|centering|label|protect|vspace|hspace)\s*(?:\[[^\]]*\])?\s*(?:\{[^{}]*\})?",
+        "",
+        text,
+    )
+    text = re.sub(r"\\(?:textbf|textit|emph|mathrm|text)\s*\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\SI\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1 \2", text)
+    text = re.sub(r"\\si\s*\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\(?:left|right)?\{([^{}]*)\}", r"\1", text)  # grouping braces in cells
+    return [line.rstrip() for line in text.split("\n")]
+
+
+RENDERABLE_FENCE_LANGUAGES = {"markdown", "md", "latex", "tex"}
+
+
+def _unwrap_renderable_fences(text: str) -> str:
+    """DeepSeek often wraps the whole answer in a ```markdown/```latex fence."""
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        stripped = lines[index].strip()
+        if not (stripped.startswith("```") or stripped.startswith("~~~")):
+            out.append(lines[index])
+            index += 1
+            continue
+        language = stripped.lstrip("`~").strip().lower()
+        body: list[str] = []
+        nested = False
+        index += 1
+        while index < len(lines):
+            candidate = lines[index].strip()
+            fence_here = candidate.startswith("```") or candidate.startswith("~~~")
+            if fence_here:
+                tag = candidate.lstrip("`~").strip().lower()
+                if not nested and not tag:
+                    break  # bare fence at wrapper level closes it
+                nested = bool(tag)  # a language-tagged fence opens a nested block
+            body.append(lines[index])
+            index += 1
+        index += 1  # consume the closing fence
+        if language in {"markdown", "md"}:
+            out.extend(body)
+        elif language in {"latex", "tex"}:
+            out.extend(_latex_body_to_markdown(body))
+        else:
+            out.append(stripped)
+            out.extend(body)
+            out.append("```")
+    return "\n".join(out)
+
+
 def _render_markdown(text: str) -> str:
     """Make an answer readable in hosts that print tool results as literal text.
 
@@ -381,45 +468,30 @@ def _render_markdown(text: str) -> str:
     Fenced code is left exactly as-is — except a ```markdown fence, which is the
     model wrapping its own answer and should be unwrapped and rendered.
     """
-    lines = text.split("\n")
+    lines = _unwrap_renderable_fences(text).split("\n")
     out: list[str] = []
     index = 0
     in_code = False
-    in_md_fence = False
     in_math = False
     while index < len(lines):
         raw = lines[index]
         stripped = raw.strip()
         is_fence = stripped.startswith("```") or stripped.startswith("~~~")
-        if not in_math and not in_code and is_fence:
-            language = stripped.lstrip("`~").strip().lower()
-            if in_md_fence and not language:
-                in_md_fence = False
-                index += 1  # bare fence closes the markdown wrapper
-                continue
-            if language in {"markdown", "md"} and not in_md_fence:
-                in_md_fence = True
-                index += 1  # drop the opening marker, keep rendering the body
-                continue
-            in_code = True
+        if not in_math and is_fence:
+            in_code = not in_code
             out.append(raw)
-            index += 1
-            continue
-        if in_code and is_fence:
-            in_code = False
-            out.append(raw)
-            index += 1
-            continue
-        if not in_code and stripped in {"$$", "\\["}:
-            in_math = True
-            index += 1
-            continue
-        if not in_code and stripped in {"$$", "\\]"} and in_math:
-            in_math = False
             index += 1
             continue
         if in_code:
             out.append(raw)
+            index += 1
+            continue
+        if in_math and stripped in {"$$", "\\]"}:
+            in_math = False
+            index += 1
+            continue
+        if not in_math and stripped in {"$$", "\\["}:
+            in_math = True
             index += 1
             continue
         if in_math:

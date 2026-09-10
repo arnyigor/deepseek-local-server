@@ -345,6 +345,39 @@ def test_markdown_fenced_answer_is_unwrapped_and_rendered(bridge):
     asyncio.run(run())
 
 
+def test_latex_document_fence_is_reduced_to_readable_text(bridge):
+    requests, replies, ctx = bridge
+    document = "\n".join(
+        [
+            "```latex",
+            "\\documentclass{article}",
+            "\\begin{document}",
+            "\\noindent\\textbf{Циолковский:}",
+            "\\[",
+            "\\Delta v = I_{\\text{уд}} g_0 \\ln\\frac{m_0}{m_k}",
+            "\\]",
+            "\\begin{tabular}{l S}",
+            "\\toprule",
+            "Тело & {$v_1$, \\si{km/s}} \\\\",
+            "\\midrule",
+            "Земля & 7.91 \\\\",
+            "\\bottomrule",
+            "\\end{tabular}",
+            "\\end{document}",
+            "```",
+        ]
+    )
+    replies.append({"deltas": [{"content": document}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert "documentclass" not in result and "toprule" not in result  # body only
+        assert "Δ v = I(уд) g₀ ln(m₀/mₖ)" in result  # math rendered
+        assert result.count("┌") == 1 and "│ Тело" in result and "km/s" in result
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})
