@@ -1,107 +1,92 @@
 from __future__ import annotations
 
+import base64
 import json
-from typing import Any
+from dataclasses import dataclass
+from typing import Iterable
 
-from deepseek_local_server.openai.content import content_to_text
-from deepseek_local_server.openai.schemas import ChatCompletionRequest, ChatMessage, ToolDefinition
-
-_TOOL_START = "<<<DEEPSEEK_TOOL_CALL>>>"
-_TOOL_END = "<<<END_DEEPSEEK_TOOL_CALL>>>"
+from deepseek_local_server.openai.schemas import ChatCompletionRequest, ChatMessage
 
 
-def _pretty_json(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)
+@dataclass(frozen=True, slots=True)
+class ImagePart:
+    data: bytes
+    filename: str
+    content_type: str
 
 
-def _tool_choice_instruction(tool_choice: Any) -> str:
-    if tool_choice is None or tool_choice == "auto":
-        return "Use a tool only when you actually need it; otherwise just answer normally."
-    if tool_choice == "none":
-        return "Don't use any tool this turn, just answer in plain text."
-    if tool_choice == "required":
-        return "Use at least one of the tools below before giving your final answer."
-    if isinstance(tool_choice, dict):
-        function = tool_choice.get("function")
-        if isinstance(function, dict) and function.get("name"):
-            return f"Use the {function['name']!r} tool for this turn."
-    return "Follow the requested tool choice."
+def extract_images(messages: Iterable[ChatMessage]) -> list[ImagePart]:
+    """Pull inline base64 images (OpenAI vision `image_url` data URLs) out of messages.
 
-
-def _format_tools(tools: list[ToolDefinition]) -> str:
-    lines: list[str] = []
-    for tool in tools:
-        fn = tool.function
-        lines.append(f"- {fn.name}: {fn.description or '(no description)'}")
-        lines.append(f"  arguments schema: {json.dumps(fn.parameters, ensure_ascii=False)}")
-    return "\n".join(lines)
-
-
-def _format_assistant_tool_calls(message: ChatMessage) -> str:
-    if not message.tool_calls:
-        return ""
-    lines: list[str] = []
-    for call in message.tool_calls:
-        function = call.get("function") if isinstance(call, dict) else None
-        if not isinstance(function, dict):
+    Remote (http/https) image URLs are not fetched here — DeepSeek's endpoint wants
+    the raw bytes uploaded directly, and this gateway has no case yet that sends one.
+    """
+    images: list[ImagePart] = []
+    for msg in messages:
+        content = msg.content
+        if not isinstance(content, list):
             continue
-        arguments = function.get("arguments", "{}")
-        try:
-            decoded = json.loads(arguments) if isinstance(arguments, str) else arguments
-        except json.JSONDecodeError:
-            decoded = arguments
-        lines.append(f"  (called {function.get('name')} with {json.dumps(decoded, ensure_ascii=False)})")
-    return "\n".join(lines)
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            image_url = part.get("image_url")
+            url = image_url.get("url") if isinstance(image_url, dict) else None
+            if not isinstance(url, str) or not url.startswith("data:"):
+                continue
+            header, _, b64data = url.partition(",")
+            content_type = header.removeprefix("data:").split(";")[0] or "image/png"
+            try:
+                data = base64.b64decode(b64data)
+            except (ValueError, TypeError):
+                continue
+            ext = content_type.split("/")[-1] or "png"
+            images.append(ImagePart(data, f"image.{ext}", content_type))
+    return images
 
 
-def _format_message(message: ChatMessage) -> str:
-    text = content_to_text(message.content)
+def _content_to_text(content: object) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") in {"text", "input_text"} and isinstance(part.get("text"), str):
+                    out.append(part["text"])
+                elif isinstance(part.get("content"), str):
+                    out.append(part["content"])
+            elif isinstance(part, str):
+                out.append(part)
+        return "\n".join(out)
+    return json.dumps(content, ensure_ascii=False)
 
-    if message.role == "assistant" and message.tool_calls:
-        extra = _format_assistant_tool_calls(message)
-        return f"{text}\n{extra}" if text else extra
 
-    return text
-
-
-def build_prompt(
-    request: ChatCompletionRequest,
-    *,
-    messages: list[ChatMessage] | None = None,
-    start_index: int = 0,
-    continuation: bool = False,
-) -> str:
-    tools = request.tools or []
-    transcript = messages if messages is not None else request.messages
-
+def build_prompt(request: ChatCompletionRequest, messages: Iterable[ChatMessage] | None = None) -> str:
+    selected = list(messages if messages is not None else request.messages)
     sections: list[str] = []
+    for msg in selected:
+        text = _content_to_text(msg.content)
+        if msg.role == "tool":
+            sections.append(f"[TOOL RESULT {msg.tool_call_id or msg.name or ''}]\n{text}")
+        else:
+            sections.append(f"[{msg.role.upper()}]\n{text}")
 
-    # The tool contract was already given at the start of this chat; DeepSeek still sees it
-    # above in the visible conversation, so repeating it on every follow-up turn only
-    # adds noise.
-    if not continuation:
-        if tools and request.tool_choice != "none":
-            parallel = request.parallel_tool_calls is not False
-            sections.append(
-                "\n".join(
-                    [
-                        "You have access to these tools:",
-                        _format_tools(tools),
-                        "",
-                        _tool_choice_instruction(request.tool_choice),
-                        "To call one, write exactly this and nothing else around it:",
-                        _TOOL_START,
-                        '{"name":"tool_name","arguments":{"arg":"value"}}',
-                        _TOOL_END,
-                        "Use the exact tool name from the list above, valid JSON arguments, and don't say the"
-                        " tool already ran until you see its result."
-                        + (" You can call more than one in a turn." if parallel else " Call at most one per turn."),
-                    ]
-                )
-            )
-        elif tools:
-            sections.append("Tools are available but don't use any this turn — just answer in plain text.")
-
-    sections.extend(_format_message(message) for message in transcript)
-
-    return "\n\n".join(section for section in sections if section)
+    if request.tools:
+        tool_defs = [
+            {
+                "name": t.function.name,
+                "description": t.function.description or "",
+                "parameters": t.function.parameters,
+            }
+            for t in request.tools
+        ]
+        sections.append(
+            "[TOOL ADAPTER]\n"
+            "You may call one of the following tools when needed. When you want a tool call, output ONLY strict JSON "
+            'in this shape: {"tool_call":{"name":"tool_name","arguments":{...}}}. '
+            "Do not wrap that JSON in markdown. Otherwise answer normally.\n"
+            + json.dumps(tool_defs, ensure_ascii=False)
+        )
+    return "\n\n".join(sections).strip()

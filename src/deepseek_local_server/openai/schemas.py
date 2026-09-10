@@ -2,79 +2,40 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-ChatMode = Literal["expert", "instant"]
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="allow")
-
-    role: Literal["system", "developer", "user", "assistant", "tool"]
+    role: Literal["system", "user", "assistant", "tool"]
     content: Any = None
-    name: str | None = None
     tool_call_id: str | None = None
-    tool_calls: list[dict[str, Any]] | None = None
+    name: str | None = None
 
 
-class FunctionDefinition(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    name: str = Field(min_length=1, max_length=256)
+class FunctionDef(BaseModel):
+    name: str
     description: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-class ToolDefinition(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
+class ToolDef(BaseModel):
     type: Literal["function"] = "function"
-    function: FunctionDefinition
+    function: FunctionDef
 
 
 class StreamOptions(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
     include_usage: bool = False
 
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
-
-    model: str
-    mode: ChatMode = "expert"
-    messages: list[ChatMessage] = Field(min_length=1)
-    tools: list[ToolDefinition] | None = None
-    tool_choice: Any = None
-    parallel_tool_calls: bool | None = None
+    model: str = "deepseek-reasoner"
+    messages: list[ChatMessage]
     stream: bool = False
     stream_options: StreamOptions | None = None
-    max_tokens: int | None = Field(default=None, gt=0)
-    max_completion_tokens: int | None = Field(default=None, gt=0)
-    temperature: float | None = None
-    top_p: float | None = None
-    n: int = 1
-    stop: str | list[str] | None = None
+    tools: list[ToolDef] | None = None
+    tool_choice: Any = None
     user: str | None = None
-
-    @model_validator(mode="after")
-    def validate_supported_shape(self) -> "ChatCompletionRequest":
-        if self.n != 1:
-            raise ValueError("Only n=1 is supported")
-        return self
-
-    @property
-    def requested_max_tokens(self) -> int | None:
-        return self.max_completion_tokens or self.max_tokens
-
-
-class ModelCard(BaseModel):
-    id: str
-    object: Literal["model"] = "model"
-    created: int
-    owned_by: str = "deepseek-local-server"
-
-
-class ModelList(BaseModel):
-    object: Literal["list"] = "list"
-    data: list[ModelCard]
+    temperature: float | None = None
+    max_tokens: int | None = None

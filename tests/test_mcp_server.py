@@ -6,9 +6,6 @@ import httpx
 import pytest
 
 from deepseek_local_server import mcp_server
-from deepseek_local_server.config import Settings
-from deepseek_local_server.openai.schemas import ChatCompletionRequest
-from deepseek_local_server.service import CompletionService
 
 
 @pytest.fixture
@@ -31,11 +28,11 @@ def bridge(monkeypatch):
     ))
     monkeypatch.setattr(mcp_server, "read_api_token", lambda _: "test-token")
     monkeypatch.setattr(mcp_server, "_history", [])
-    monkeypatch.setattr(mcp_server, "_conversation_lock", asyncio.Lock())
+    monkeypatch.setattr(mcp_server, "_lock", asyncio.Lock())
     return requests, replies, AsyncMock()
 
 
-def test_continuation_and_explicit_reset(bridge, tmp_path):
+def test_continuation_and_explicit_reset(bridge):
     requests, replies, ctx = bridge
     replies.extend(["accepted", "BLUE-CAT-42", "new topic", "continued"])
 
@@ -56,14 +53,6 @@ def test_continuation_and_explicit_reset(bridge, tmp_path):
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "new topic"},
     ]
-
-    # Verify the payloads actually select continuation in the existing backend.
-    service = CompletionService(Settings(home=tmp_path))
-    page = type("Page", (), {"is_closed": lambda self: False})()
-    service._session_page = page
-    service._session_messages = ChatCompletionRequest(**requests[0]).messages
-    assert service._continuation_delta(ChatCompletionRequest(**requests[1]).messages) is not None
-    assert service._continuation_delta(ChatCompletionRequest(**requests[2]).messages) is None
 
 
 @pytest.mark.parametrize("failure", [503, httpx.ConnectError("offline"), httpx.ReadTimeout("slow"), None])
@@ -114,17 +103,17 @@ def test_concurrent_calls_preserve_order(bridge):
     ]
 
 
-def test_mode_is_forwarded_per_call_without_resetting_history(bridge):
+def test_reasoning_and_search_are_forwarded_per_call_without_resetting_history(bridge):
     requests, replies, ctx = bridge
     replies.extend(["fast", "detailed"])
 
     async def run():
-        await mcp_server.ask_deepseek("first", ctx, mode="instant")
-        await mcp_server.ask_deepseek("continue", ctx)
+        await mcp_server.ask_deepseek("first", ctx, reasoning=False)
+        await mcp_server.ask_deepseek("continue", ctx, search=True)
 
     asyncio.run(run())
-    assert requests[0]["mode"] == "instant"
-    assert requests[1]["mode"] == "expert"
+    assert requests[0]["model"] == "deepseek-chat"
+    assert requests[1]["model"] == "deepseek-reasoner-search"
     assert len(requests[1]["messages"]) == 3
 
 
@@ -145,7 +134,7 @@ def test_cancellation_stops_request_without_updating_history(monkeypatch):
     monkeypatch.setattr(mcp_server.httpx, "AsyncClient", lambda **_: client)
     monkeypatch.setattr(mcp_server, "read_api_token", lambda _: "test-token")
     monkeypatch.setattr(mcp_server, "_history", [])
-    monkeypatch.setattr(mcp_server, "_conversation_lock", asyncio.Lock())
+    monkeypatch.setattr(mcp_server, "_lock", asyncio.Lock())
 
     async def run():
         task = asyncio.create_task(mcp_server.ask_deepseek("cancel me", AsyncMock()))
@@ -154,7 +143,7 @@ def test_cancellation_stops_request_without_updating_history(monkeypatch):
         with pytest.raises(asyncio.CancelledError):
             await task
         assert stopped.is_set()
-        assert not mcp_server._conversation_lock.locked()
+        assert not mcp_server._lock.locked()
         assert mcp_server._history == []
 
     asyncio.run(run())

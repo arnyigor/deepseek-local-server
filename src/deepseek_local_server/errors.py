@@ -1,22 +1,26 @@
-class DeepSeekLocalServerError(RuntimeError):
-    """Base error for expected local-server failures."""
+class DeepSeekLocalError(RuntimeError):
+    """Base error for the local gateway."""
 
 
-class AuthenticationRequiredError(DeepSeekLocalServerError):
+class AuthenticationRequiredError(DeepSeekLocalError):
     pass
 
 
-class BrowserProtocolError(DeepSeekLocalServerError):
+class DirectBackendError(DeepSeekLocalError):
     pass
 
 
-class DeepSeekPageError(DeepSeekLocalServerError):
+class DirectProtocolError(DirectBackendError):
     pass
 
 
-class UnsupportedContentError(DeepSeekLocalServerError):
+class DirectRateLimitError(DirectBackendError):
     pass
 
 
-class ToolProtocolError(DeepSeekLocalServerError):
+class BrowserProtocolError(DeepSeekLocalError):
+    pass
+
+
+class ToolProtocolError(DeepSeekLocalError):
     pass

@@ -6,89 +6,60 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from deepseek_local_server.errors import ToolProtocolError
-
-_TOOL_BLOCK = re.compile(r"<<<DEEPSEEK_TOOL_CALL>>>\s*(.*?)\s*<<<END_DEEPSEEK_TOOL_CALL>>>", re.DOTALL | re.IGNORECASE)
-_CODE_FENCE = re.compile(r"^```(?:json)?\s*(.*?)\s*```$", re.DOTALL | re.IGNORECASE)
-
 
 @dataclass(frozen=True, slots=True)
-class ParsedToolCall:
-    id: str
-    name: str
-    arguments_json: str
+class ParsedOutput:
+    content: str
+    tool_calls: list[dict[str, Any]]
 
 
-@dataclass(frozen=True, slots=True)
-class ParsedAssistantOutput:
-    content: str | None
-    tool_calls: tuple[ParsedToolCall, ...]
-    finish_reason: str
+def _coerce(obj: object, allowed: set[str]) -> list[dict[str, Any]]:
+    if not isinstance(obj, dict):
+        return []
+    candidate = obj.get("tool_call") or obj.get("function_call")
+    candidates = obj.get("tool_calls") if isinstance(obj.get("tool_calls"), list) else None
+    if candidates is None and candidate is not None:
+        candidates = [candidate]
+    if not candidates:
+        return []
+    out = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") if isinstance(item.get("function"), dict) else item
+        name = fn.get("name")
+        if not isinstance(name, str) or name not in allowed:
+            continue
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            try:
+                json.loads(args)
+                arg_text = args
+            except Exception:
+                arg_text = json.dumps({"value": args}, ensure_ascii=False)
+        else:
+            arg_text = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+        out.append({
+            "id": f"call_{uuid4().hex[:24]}",
+            "type": "function",
+            "function": {"name": name, "arguments": arg_text},
+        })
+    return out
 
 
-def _decode_payload(raw: str) -> dict[str, Any]:
-    candidate = raw.strip()
-    fence = _CODE_FENCE.match(candidate)
-    if fence:
-        candidate = fence.group(1).strip()
-    value = json.loads(candidate)
-    if not isinstance(value, dict):
-        raise ToolProtocolError("Tool-call payload must be a JSON object")
-    return value
-
-
-def _normalise_call(payload: dict[str, Any], allowed_tools: set[str]) -> ParsedToolCall:
-    name = payload.get("name")
-    arguments = payload.get("arguments", {})
-    if not isinstance(name, str) or not name:
-        raise ToolProtocolError("Tool-call payload is missing a valid name")
-    if name not in allowed_tools:
-        raise ToolProtocolError(f"DeepSeek attempted unknown tool: {name}")
-    if isinstance(arguments, str):
+def parse_output(text: str, allowed_tools: set[str]) -> ParsedOutput:
+    stripped = text.strip()
+    if not allowed_tools:
+        return ParsedOutput(stripped, [])
+    candidates = [stripped]
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped, flags=re.I)
+    if fenced:
+        candidates.insert(0, fenced.group(1).strip())
+    for raw in candidates:
         try:
-            parsed_arguments = json.loads(arguments)
-        except json.JSONDecodeError as exc:
-            raise ToolProtocolError(f"Tool arguments for {name} are not valid JSON") from exc
-    else:
-        parsed_arguments = arguments
-    if not isinstance(parsed_arguments, dict):
-        raise ToolProtocolError(f"Tool arguments for {name} must be an object")
-    return ParsedToolCall(
-        id=f"call_{uuid4().hex[:24]}",
-        name=name,
-        arguments_json=json.dumps(parsed_arguments, ensure_ascii=False, separators=(",", ":")),
-    )
-
-
-def _parse_json_fallback(output: str, allowed_tools: set[str]) -> tuple[ParsedToolCall, ...]:
-    candidate = output.strip()
-    fence = _CODE_FENCE.match(candidate)
-    if fence:
-        candidate = fence.group(1).strip()
-    try:
-        payload = json.loads(candidate)
-    except json.JSONDecodeError:
-        return ()
-    if not isinstance(payload, dict) or "tool_calls" not in payload:
-        return ()
-    calls = payload["tool_calls"]
-    if not isinstance(calls, list):
-        return ()
-    return tuple(_normalise_call(call, allowed_tools) for call in calls if isinstance(call, dict))
-
-
-def parse_assistant_output(output: str, allowed_tool_names: set[str]) -> ParsedAssistantOutput:
-    if not allowed_tool_names:
-        return ParsedAssistantOutput(content=output.strip(), tool_calls=(), finish_reason="stop")
-
-    matches = list(_TOOL_BLOCK.finditer(output))
-    if matches:
-        calls = tuple(_normalise_call(_decode_payload(match.group(1)), allowed_tool_names) for match in matches)
-        content = _TOOL_BLOCK.sub("", output).strip() or None
-        return ParsedAssistantOutput(content=content, tool_calls=calls, finish_reason="tool_calls")
-
-    fallback = _parse_json_fallback(output, allowed_tool_names)
-    if fallback:
-        return ParsedAssistantOutput(content=None, tool_calls=fallback, finish_reason="tool_calls")
-
-    return ParsedAssistantOutput(content=output.strip(), tool_calls=(), finish_reason="stop")
+            calls = _coerce(json.loads(raw), allowed_tools)
+        except Exception:
+            calls = []
+        if calls:
+            return ParsedOutput("", calls)
+    return ParsedOutput(stripped, [])

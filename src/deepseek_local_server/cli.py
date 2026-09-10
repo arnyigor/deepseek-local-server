@@ -5,16 +5,19 @@ import asyncio
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Sequence
 
 import httpx
 import uvicorn
 
 from deepseek_local_server.api.app import create_app
-from deepseek_local_server.auth import ensure_api_token, read_api_token, token_path_for_display
-from deepseek_local_server.browser.manager import BrowserManager
-from deepseek_local_server.browser.worker import DeepSeekBrowserWorker
+from deepseek_local_server.auth import ensure_api_token, read_api_token
+from deepseek_local_server.browser.auth_capture import capture_auth
+from deepseek_local_server.browser.chrome import resolve_chrome_path
 from deepseek_local_server.config import Settings
+from deepseek_local_server.direct.auth_config import load_auth
+from deepseek_local_server.direct.client import DeepSeekDirectClient
 
 
 def _settings() -> Settings:
@@ -26,113 +29,100 @@ def _settings() -> Settings:
 
 def command_init(settings: Settings) -> int:
     token = ensure_api_token(settings)
-    print("DeepSeek Local Server initialized.")
-    print(f"Home:    {settings.home}")
-    print(f"Profile: {settings.profile_dir}")
-    print(f"Token:   {token_path_for_display(settings.token_file)}")
-    print(f"Token length: {len(token)} characters")
+    print("DeepSeek Local Server v2 initialized.")
+    print(f"Home:      {settings.home}")
+    print(f"API token: {settings.token_file} ({len(token)} chars)")
+    print(f"Auth file: {settings.auth_file}")
     return 0
-
-
-async def _auth_async(settings: Settings) -> None:
-    visible = settings.with_headless(False)
-    manager = BrowserManager(visible)
-    worker = DeepSeekBrowserWorker(visible, manager)
-    try:
-        await worker.login_interactively()
-        print("DeepSeek browser profile is ready.")
-    finally:
-        await manager.close()
 
 
 def command_auth(settings: Settings) -> int:
     ensure_api_token(settings)
-    asyncio.run(_auth_async(settings))
+    auth = asyncio.run(capture_auth(settings))
+    print("DeepSeek Web auth captured successfully.")
+    print(f"Saved: {settings.auth_file}")
+    print(f"Token: {'yes' if auth.token else 'no'}; cookie: {'yes' if auth.cookie else 'no'}; wasm: {'yes' if auth.wasm_url else 'no'}")
     return 0
 
 
 def command_serve(settings: Settings) -> int:
     ensure_api_token(settings)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    print(f"OpenAI-compatible endpoint: {settings.api_base_url}/v1")
-    print(f"Model: {settings.model_id}")
-    print(f"Browser profile: {settings.profile_dir}")
-    print(f"Headless: {settings.headless}")
-    print(f"DeepThink (expert mode): {settings.deepthink_enabled}")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    print(f"Endpoint: {settings.api_base_url}/v1")
+    print(f"Primary:  {'direct DeepSeek Web API' if settings.direct_enabled else 'disabled'}")
+    print(f"Fallback: {'system Chrome (CDP)' if settings.browser_fallback_enabled else 'disabled'}")
     uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_level="info")
     return 0
 
 
-def command_doctor(settings: Settings) -> int:
+def command_doctor(settings: Settings, online: bool) -> int:
+    print("=== Local files ===")
     print(f"Home: {settings.home}")
-    print(f"Profile exists: {settings.profile_dir.exists()}")
-    print(f"Token exists: {settings.token_file.exists()}")
-    print(f"Endpoint: {settings.api_base_url}/v1")
     try:
-        health = httpx.get(f"{settings.api_base_url}/health", timeout=3)
+        print(f"System Chrome: {resolve_chrome_path()}")
+    except Exception as exc:
+        print(f"System Chrome: FAIL: {exc}")
+    print(f"Token file: {settings.token_file} ({'OK' if settings.token_file.exists() else 'MISSING'})")
+    print(f"Auth file:  {settings.auth_file} ({'OK' if settings.auth_file.exists() else 'MISSING'})")
+    auth_ok = False
+    try:
+        auth = load_auth(settings.auth_file)
+        auth_ok = True
+        print(f"DeepSeek auth: OK (cookie={bool(auth.cookie)}, wasm={bool(auth.wasm_url)})")
+    except Exception as exc:
+        print(f"DeepSeek auth: FAIL: {exc}")
+
+    if online and auth_ok:
+        print("\n=== Direct backend probe ===")
+        probe = asyncio.run(DeepSeekDirectClient(settings).probe())
+        print(json.dumps(probe, indent=2, ensure_ascii=False))
+
+    print("\n=== Running server ===")
+    try:
+        health = httpx.get(f"{settings.api_base_url}/health", timeout=2)
         health.raise_for_status()
         print(json.dumps(health.json(), indent=2, ensure_ascii=False))
-        token = read_api_token(settings)
-        models = httpx.get(
-            f"{settings.api_base_url}/v1/models",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=3,
-        )
-        models.raise_for_status()
-        print(json.dumps(models.json(), indent=2, ensure_ascii=False))
     except Exception as exc:
-        print(f"Server check failed: {exc}")
-        return 1
-    return 0
+        print(f"Server not reachable: {exc}")
+    return 0 if auth_ok else 1
 
 
-def command_chat(settings: Settings, prompt: str, timeout: float) -> int:
+def command_chat(settings: Settings, prompt: str, model: str, timeout: float) -> int:
     token = read_api_token(settings)
     response = httpx.post(
         f"{settings.api_base_url}/v1/chat/completions",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "model": settings.model_id,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": False,
-        },
+        headers={"Authorization": f"Bearer {token}", "x-agent-session": "cli"},
+        json={"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False},
         timeout=timeout,
     )
     if response.is_error:
         print(response.text, file=sys.stderr)
         return 1
     payload = response.json()
-    print(payload["choices"][0]["message"].get("content") or json.dumps(payload["choices"][0]["message"], ensure_ascii=False, indent=2))
+    msg = payload["choices"][0]["message"]
+    if msg.get("reasoning_content"):
+        print("[reasoning]\n" + msg["reasoning_content"] + "\n")
+    print(msg.get("content") or json.dumps(msg.get("tool_calls"), ensure_ascii=False, indent=2))
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="deepseek-local-server",
-        description="Expose DeepSeek Web (DeepThink) as an OpenAI-compatible local model server",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("init", help="Create local directories and API token")
-    sub.add_parser("auth", help="Open Chromium and save a DeepSeek login profile")
-    sub.add_parser("serve", help="Start the OpenAI-compatible local server")
-    sub.add_parser("doctor", help="Check server health and model discovery")
-
-    chat = sub.add_parser("chat", help="Send a direct OpenAI-compatible test request")
-    chat.add_argument("prompt")
-    chat.add_argument("--timeout", type=float, default=330.0)
-
-    sub.add_parser("mcp", help="Run the ask_deepseek MCP server over stdio")
-    return parser
+    p = argparse.ArgumentParser(prog="deepseek-local-server", description="Hybrid local gateway for DeepSeek Web")
+    sub = p.add_subparsers(dest="command", required=True)
+    sub.add_parser("init")
+    sub.add_parser("auth")
+    sub.add_parser("serve")
+    d = sub.add_parser("doctor")
+    d.add_argument("--offline", action="store_true")
+    c = sub.add_parser("chat")
+    c.add_argument("prompt")
+    c.add_argument("--model", default="deepseek-reasoner")
+    c.add_argument("--timeout", type=float, default=330)
+    sub.add_parser("mcp")
+    return p
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    # Windows consoles default to cp866/cp1251 and crash on characters DeepSeek answers
-    # routinely contain (zero-width spaces, CJK). Never let a pretty answer kill the CLI.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError, OSError):
-            pass
     args = build_parser().parse_args(argv)
     settings = _settings()
     if args.command == "init":
@@ -142,14 +132,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     elif args.command == "serve":
         code = command_serve(settings)
     elif args.command == "doctor":
-        code = command_doctor(settings)
+        code = command_doctor(settings, online=not args.offline)
     elif args.command == "chat":
-        code = command_chat(settings, args.prompt, args.timeout)
+        code = command_chat(settings, args.prompt, args.model, args.timeout)
     elif args.command == "mcp":
         from deepseek_local_server.mcp_server import main as mcp_main
-
         mcp_main()
         code = 0
     else:
-        raise AssertionError(f"Unhandled command: {args.command}")
+        raise SystemExit(2)
     raise SystemExit(code)
+
+
+if __name__ == "__main__":
+    main()

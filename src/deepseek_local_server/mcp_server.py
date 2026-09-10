@@ -1,123 +1,99 @@
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 import httpx
 from mcp.server.mcpserver import Context, MCPServer
 
 from deepseek_local_server.auth import read_api_token
 from deepseek_local_server.config import Settings
-from deepseek_local_server.openai.schemas import ChatMode
 
 _settings = Settings.from_env()
-
-# Web-search-augmented and DeepThink (reasoning) answers can take much longer than a plain
-# reply, so the default needs real headroom above the browser's own generation timeout.
-_DEFAULT_TIMEOUT_SECONDS = _settings.request_timeout_seconds + 120
-
-# stdio has one client per process. History lives until that client disconnects.
+_DEFAULT_TIMEOUT = _settings.request_timeout_seconds + 30
 _history: list[dict[str, str]] = []
-_conversation_lock = asyncio.Lock()
+_lock = asyncio.Lock()
+_session_id = f"mcp-{uuid4().hex}"
 
 server = MCPServer(
     name="deepseek-web",
     instructions=(
-        "Ask a plain-text question to DeepSeek (chat.deepseek.com) through a local browser "
-        "bridge, with DeepThink (R1 reasoning / expert mode) enabled by default. It has no "
-        "access to your files, shell, or other tools -- put all needed context directly in "
-        "the question. Good for a second opinion, brainstorming, or explaining something; "
-        "not for multi-step agentic work. DeepThink answers can take a few minutes -- don't "
-        "lower timeout_seconds below the default. Calls continue the current conversation; "
-        "set new_conversation=true to start a fresh chat. Set mode='instant' for a fast "
-        "answer without enabling Expert or DeepThink; mode defaults to 'expert' on each call."
+        "Use DeepSeek Web as a second-opinion/research model through a local hybrid gateway. "
+        "The direct Web API is primary and browser automation is only a fallback. "
+        "DeepSeek merged its Instant/Expert/Vision modes into a single model (2026-09); "
+        "there is no model choice left, only 'reasoning' and 'search' toggles. "
+        "Pass all required context in the question."
     ),
 )
+
+
+def _model(reasoning: bool, search: bool) -> str:
+    if search:
+        return "deepseek-reasoner-search" if reasoning else "deepseek-chat-search"
+    return "deepseek-reasoner" if reasoning else "deepseek-chat"
 
 
 @server.tool()
 async def ask_deepseek(
     question: str,
     ctx: Context,
-    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+    reasoning: bool = True,
+    search: bool = False,
     new_conversation: bool = False,
-    mode: ChatMode = "expert",
+    timeout_seconds: float = _DEFAULT_TIMEOUT,
 ) -> str:
-    """Ask DeepSeek Web a plain-text question and return its answer.
-
-    Calls remember earlier questions and answers in this MCP process. Set
-    `new_conversation=True` to discard that history and start a new chat. Reconnecting
-    the MCP process also clears history. DeepSeek cannot read your project files or run
-    commands, so paste any relevant code or context directly into the question. Replies
-    can take a few minutes with DeepThink (reasoning mode) enabled -- the default timeout
-    already accounts for that.
-
-    `mode="instant"` selects Instant without enabling DeepThink. The default is
-    `mode="expert"` on every call; repeat `mode="instant"` on Instant follow-ups.
-    """
-    async with _conversation_lock:
+    """Ask DeepSeek Web through the local gateway."""
+    async with _lock:
         if new_conversation:
             _history.clear()
-        return await _ask_in_conversation(question, ctx, timeout_seconds, mode)
+        try:
+            model = _model(reasoning, search)
+            token = read_api_token(_settings)
+        except Exception as exc:
+            return f"deepseek-local-server configuration error: {exc}"
+
+        user = {"role": "user", "content": question}
+        messages = [*_history, user]
+        task = asyncio.create_task(_post(model, messages, token, timeout_seconds))
+        elapsed = 0.0
+        try:
+            while not task.done():
+                done, _ = await asyncio.wait({task}, timeout=5)
+                if done:
+                    break
+                elapsed += 5
+                try:
+                    await ctx.report_progress(progress=elapsed, total=timeout_seconds, message="Waiting for DeepSeek...")
+                except Exception:
+                    pass
+            response = task.result()
+        except httpx.ConnectError:
+            return f"Could not reach deepseek-local-server at {_settings.api_base_url}. Start `deepseek-local-server serve`."
+        except httpx.TimeoutException:
+            return f"Timed out after {timeout_seconds:.0f}s."
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        if response.is_error:
+            return f"deepseek-local-server error {response.status_code}: {response.text}"
+        payload = response.json()
+        message = payload["choices"][0]["message"]
+        answer = message.get("content") or ""
+        if not answer and message.get("tool_calls"):
+            answer = str(message["tool_calls"])
+        if answer:
+            _history.extend([user, {"role": "assistant", "content": answer}])
+        return answer or "(DeepSeek returned an empty response)"
 
 
-async def _ask_in_conversation(
-    question: str, ctx: Context, timeout_seconds: float, mode: ChatMode,
-) -> str:
-    try:
-        token = read_api_token(_settings)
-    except (FileNotFoundError, RuntimeError) as exc:
-        return f"deepseek-local-server is not initialized: {exc}"
-
-    user_message = {"role": "user", "content": question}
-    messages = [*_history, user_message]
-
-    async def do_request() -> httpx.Response:
-        async with httpx.AsyncClient(timeout=timeout_seconds + 10) as client:
-            return await client.post(
-                f"{_settings.api_base_url}/v1/chat/completions",
-                headers={"Authorization": f"Bearer {token}"},
-                json={
-                    "model": _settings.model_id,
-                    "mode": mode,
-                    "messages": messages,
-                    "stream": False,
-                },
-            )
-
-    task = asyncio.create_task(do_request())
-    elapsed = 0.0
-    try:
-        while not task.done():
-            done, _ = await asyncio.wait({task}, timeout=5)
-            if done:
-                break
-            elapsed += 5
-            try:
-                await ctx.report_progress(progress=elapsed, total=timeout_seconds, message="Waiting for DeepSeek Web...")
-            except Exception:
-                pass
-        response = task.result()
-    except httpx.ConnectError:
-        return (
-            f"Could not reach deepseek-local-server at {_settings.api_base_url}. "
-            "Start it first with `deepseek-local-server serve`."
+async def _post(model: str, messages: list[dict[str, str]], token: str, timeout: float) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=timeout + 10) as client:
+        return await client.post(
+            f"{_settings.api_base_url}/v1/chat/completions",
+            headers={"Authorization": f"Bearer {token}", "x-agent-session": _session_id},
+            json={"model": model, "messages": messages, "stream": False},
         )
-    except httpx.TimeoutException:
-        return f"Timed out waiting for DeepSeek Web after {timeout_seconds:.0f}s."
-    finally:
-        # Do not leave an orphan HTTP request after an MCP cancellation.
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-
-    if response.is_error:
-        return f"deepseek-local-server returned an error ({response.status_code}): {response.text}"
-
-    payload = response.json()
-    answer = payload["choices"][0]["message"].get("content")
-    if not answer:
-        return "(DeepSeek returned an empty response)"
-    _history.extend([user_message, {"role": "assistant", "content": answer}])
-    return answer
 
 
 def main() -> None:

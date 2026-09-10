@@ -1,212 +1,223 @@
-# deepseek-local-server
+# deepseek-local-server v0.2 — hybrid direct + browser fallback
 
-OpenAI-compatible local server backed by **chat.deepseek.com** through Playwright (Chromium),
-with the **Expert model** and the **DeepThink (reasoning) toggle** enabled by default.
+Local DeepSeek Web gateway for agents and OpenAI-compatible clients.
 
-It drives the real DeepSeek Web UI in a persistent browser profile: you log in once, then any
-OpenAI-compatible client (or the bundled MCP tool) can send chat requests and get DeepThink
-answers back — no API key for the official API needed.
+## What changed from v0.1
 
-Architecture mirrors `qwen-local-server` — see [plan.md](plan.md) for port notes and confirmed DOM selectors.
+v0.1 drove the DeepSeek UI through Playwright for every request. v0.2 uses the internal Web Chat HTTP/SSE contract as the **primary transport** and keeps Playwright only for:
 
-## How it works
+1. interactive login/auth capture;
+2. emergency fallback when the direct contract fails.
 
+Normal request path:
+
+```text
+Pi / Claude / OpenAI client
+        |
+        v
+127.0.0.1:9874
+        |
+        v
+Hybrid CompletionService
+        |
+        +--> Direct DeepSeek Web API + PoW + true SSE  [PRIMARY]
+        |
+        `--> Playwright UI automation                 [FALLBACK]
 ```
-Client (OpenAI SDK / curl / MCP ask_deepseek)
-        │  HTTP POST /v1/chat/completions  (Bearer token)
-        ▼
-deepseek-local-server serve   ← FastAPI on 127.0.0.1:9874
-        │  serializes requests through a single browser worker
-        ▼
-Chromium (persistent profile, chat.deepseek.com)
-        │  selects Expert model → enables DeepThink toggle → sends → polls until the
-        │  answer is stable (stable_seconds) → extracts text
-        ▼
-Answer returned as a standard OpenAI chat completion
-```
 
-Key points:
+## Features
 
-- **One browser, one request at a time.** Requests are queued in the worker; the browser
-  profile is launched lazily on the first request and reused afterwards.
-- **Login is a persistent profile**, not stored cookies. The profile lives in
-  `%LOCALAPPDATA%\deepseek-local-server\browser-profile` (Windows) — the same directory
-  Chromium uses, so **only one process may use it at a time**. If an `auth` window is still
-  open, `serve` cannot launch its own Chromium ("profile is already in use").
-- **Expert model + DeepThink are on by default.** Before every send the worker selects the
-  "Expert" option in the top-bar model picker (Instant/Expert) and turns the DeepThink toggle
-  on (`DEEPSEEK_LOCAL_SERVER_DEEPTHINK=1`). Reasoning answers can take minutes — the default
-  request timeout is 300 s.
-- The server **only listens on loopback** and requires the local bearer token from `init`.
+- OpenAI `POST /v1/chat/completions`
+- true streaming for direct requests
+- `reasoning_content` for thinking modes
+- Fast, reasoning, search, Expert, Expert+reasoning aliases
+- per-agent remote DeepSeek sessions (`x-agent-session` / `user`)
+- automatic session reset when the client history changes
+- basic OpenAI tool-call adapter
+- MCP `ask_deepseek`
+- basic Anthropic `/v1/messages` shim
+- basic OpenAI Responses `/v1/responses` shim
+- Playwright emergency fallback
+- local bearer token is always required
+- loopback-only binding is enforced
 
-## Setup (one-time)
+## Models
+
+| Model | Web mode | Reasoning | Search |
+|---|---|---:|---:|
+| `deepseek-chat` | default | no | no |
+| `deepseek-reasoner` | default | yes | no |
+| `deepseek-chat-search` | default | no | yes |
+| `deepseek-reasoner-search` | default | yes | yes |
+| `deepseek-expert` | expert | no | no |
+| `deepseek-v4-pro` | expert | yes | no |
+
+Compatibility aliases: `deepseek-web -> deepseek-v4-pro`, `deepseek-r1 -> deepseek-reasoner`.
+
+## Windows installation
 
 ```powershell
-# Windows PowerShell (note: PS 5.1 has no `&&` — use `;` or separate lines)
-cd <path-to-repo>
-pip install -e .[dev]
-python -m playwright install chromium
+cd G:\path\to\deepseek-local-server-v2
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -U pip
+.\.venv\Scripts\pip.exe install -e ".[dev]"
 ```
 
-Linux/macOS use `./.venv/bin/deepseek-local-server` instead of `./.venv/Scripts/deepseek-local-server.exe`.
+No `playwright install` needed: `auth` and the browser fallback drive your real, already-installed
+Google Chrome over the DevTools protocol instead of a Playwright-managed browser build. Set
+`DEEPSEEK_LOCAL_SERVER_CHROME_PATH` if Chrome isn't in one of the default install locations.
 
-## Usage
-
-### 1. Init (creates home dir + API token)
+## First setup
 
 ```powershell
-./.venv/Scripts/deepseek-local-server.exe init
+.\.venv\Scripts\deepseek-local-server.exe init
+.\.venv\Scripts\deepseek-local-server.exe auth
 ```
 
-Creates `%LOCALAPPDATA%\deepseek-local-server\` with `browser-profile/`, `token`, `debug/`.
+`auth` opens Chrome. Log in to DeepSeek and send one tiny message, for example `AUTH_OK`. The program captures the auth token, cookie, `x-hif-*` headers and SHA3 PoW WASM URL from **your own browser request**, stores them in:
 
-### 2. Auth (log in once)
+```text
+%LOCALAPPDATA%\deepseek-local-server\deepseek-auth.json
+```
+
+Do not commit or share that file.
+
+Then:
 
 ```powershell
-./.venv/Scripts/deepseek-local-server.exe auth
+.\.venv\Scripts\deepseek-local-server.exe doctor
+.\.venv\Scripts\deepseek-local-server.exe serve
 ```
 
-Opens a Chromium window → sign in to DeepSeek → wait until the chat input is visible →
-**press Enter in the terminal** (keep the window open until it closes). The profile is
-saved automatically; you will not need to log in again.
-
-### 3. Serve (keep running)
-
-In a **separate terminal**, leave this running:
+In another terminal:
 
 ```powershell
-./.venv/Scripts/deepseek-local-server.exe serve
+.\.venv\Scripts\deepseek-local-server.exe chat "Reply exactly SERVICE_OK" --model deepseek-v4-pro
 ```
 
-Starts the OpenAI-compatible endpoint at `http://127.0.0.1:9874/v1`.
+## OpenAI client
 
-### 4. Verify
+```python
+from openai import OpenAI
+from pathlib import Path
+import os
 
-```powershell
-./.venv/Scripts/deepseek-local-server.exe doctor
-./.venv/Scripts/deepseek-local-server.exe chat "Reply with exactly: SERVICE_OK"
+home = Path(os.environ["LOCALAPPDATA"]) / "deepseek-local-server"
+token = (home / "token").read_text().strip()
+
+client = OpenAI(base_url="http://127.0.0.1:9874/v1", api_key=token)
+
+stream = client.chat.completions.create(
+    model="deepseek-v4-pro",
+    messages=[{"role": "user", "content": "Analyze this design."}],
+    stream=True,
+)
+for chunk in stream:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
 ```
 
-`doctor` prints health + `/v1/models`; `chat` sends a real request through the browser.
-A healthy end-to-end setup returns `SERVICE_OK`.
+## MCP / Pi
 
-### OpenAI-compatible API
-
-```powershell
-$token = Get-Content "$env:LOCALAPPDATA\deepseek-local-server\token"
-curl http://127.0.0.1:9874/v1/chat/completions `
-  -H "Authorization: Bearer $token" -H "Content-Type: application/json" `
-  -d '{"model":"deepseek-web","messages":[{"role":"user","content":"hi"}],"stream":false}'
-```
-
-Any OpenAI SDK works with `base_url="http://127.0.0.1:9874/v1"` and `api_key=<token>`.
-
-### MCP tool (`ask_deepseek`)
-
-Runs the same endpoint as a thin stdio MCP wrapper (server name `deepseek-web`,
-single tool `ask_deepseek(question, timeout_seconds, new_conversation=False, mode="expert")`). It does **not** start `serve`
-itself — keep `serve` running separately.
-
-Calls continue the current conversation by default. The MCP process keeps successful
-questions and answers in memory and sends the history so the backend can reuse the
-active browser chat. Set `new_conversation: true` to clear history and start a new chat:
+`~/.pi/agent/mcp.json`:
 
 ```json
-{"question": "Remember the code BLUE-CAT-42", "new_conversation": true}
-{"question": "What code did I give you?"}
-{"question": "Start a different topic", "new_conversation": true}
-```
-
-Keep the MCP process alive between calls (Pi: `lifecycle: "keep-alive"`). Restarting
-or reconnecting the process clears its history. Concurrent calls are serialized;
-failed calls are not added to history. An explicit reset clears history even if its
-request fails. The backend has one active browser chat: if another API/MCP client
-replaces it, the next call restores the conversation from history in a new browser chat.
-
-Use `mode: "instant"` to select Instant without enabling Expert or DeepThink:
-
-```json
-{"question": "Give a short answer", "mode": "instant"}
-{"question": "Continue", "mode": "instant"}
-```
-
-The mode applies to each call and defaults to `"expert"`; it does not reset chat history.
-It can be combined with `new_conversation: true`. The HTTP `/v1/chat/completions`
-endpoint accepts the same optional `mode` field. Restart `serve` and reconnect the
-MCP process after updating so both ends recognize the parameter.
-
-Pi (`~/.pi/agent/mcp.json`):
-
-```json
-"deepseek-web": {
-  "command": "<path-to-repo>/.venv/Scripts/python.exe",
-  "args": ["-m", "deepseek_local_server", "mcp"],
-  "cwd": "<path-to-repo>",
-  "lifecycle": "keep-alive",
-  "directTools": true,
-  "requestTimeoutMs": 600000
+{
+  "deepseek-web": {
+    "command": "G:/path/to/deepseek-local-server-v2/.venv/Scripts/python.exe",
+    "args": ["-m", "deepseek_local_server", "mcp"],
+    "cwd": "G:/path/to/deepseek-local-server-v2",
+    "lifecycle": "keep-alive",
+    "directTools": true,
+    "requestTimeoutMs": 600000
+  }
 }
 ```
 
-Claude Code / Desktop (`~/.claude.json` or `.mcp.json`):
+MCP tool:
 
-```json
-"deepseek-web": {
-  "type": "stdio",
-  "command": "<path-to-repo>/.venv/Scripts/deepseek-local-server.exe",
-  "args": ["mcp"]
-}
+```text
+ask_deepseek(
+  question,
+  mode="expert" | "instant",
+  reasoning=true,
+  search=false,
+  new_conversation=false,
+  timeout_seconds=330
+)
 ```
 
-After editing the MCP config, restart the agent so it picks up the change.
+Current DeepSeek Web contract does not expose search for Expert, so `mode="expert", search=true` is rejected instead of silently changing modes.
 
-## Tests
+## Browser fallback
+
+Enabled by default:
 
 ```powershell
-./.venv/Scripts/py.test.exe -q     # 26 tests
+$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="1"
 ```
 
-## Configuration (environment variables)
+If the direct API fails **before streaming has emitted data**, the request can fall back to Playwright. Once a live direct stream has emitted bytes, automatic fallback is intentionally disabled because mixing two answers would corrupt the stream.
 
-All optional; defaults in parentheses.
+Disable fallback while testing the direct backend:
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `DEEPSEEK_LOCAL_SERVER_HOME` | `%LOCALAPPDATA%\deepseek-local-server` | Home dir (profile, token, debug) |
-| `DEEPSEEK_LOCAL_SERVER_HOST` | `127.0.0.1` | Bind address (loopback only, enforced) |
-| `DEEPSEEK_LOCAL_SERVER_PORT` | `9874` | Port |
-| `DEEPSEEK_LOCAL_SERVER_DEEPSEEK_URL` | `https://chat.deepseek.com/` | Target page |
-| `DEEPSEEK_LOCAL_SERVER_HEADLESS` | `0` | Run Chromium headless (careful: login needs a visible window) |
-| `DEEPSEEK_LOCAL_SERVER_TIMEOUT_SECONDS` | `300` | Per-request browser timeout |
-| `DEEPSEEK_LOCAL_SERVER_STABLE_SECONDS` | `2.0` | Answer must be unchanged this long before it's accepted |
-| `DEEPSEEK_LOCAL_SERVER_POLL_INTERVAL_SECONDS` | `0.35` | Poll interval |
-| `DEEPSEEK_LOCAL_SERVER_MAX_PROMPT_CHARS` | `900000` | Prompt size cap |
-| `DEEPSEEK_LOCAL_SERVER_MODEL_ID` | `deepseek-web` | Model id exposed via the API |
-| `DEEPSEEK_LOCAL_SERVER_DEEPTHINK` | `1` | DeepThink (reasoning) toggle; Expert model is always selected |
-| `DEEPSEEK_LOCAL_SERVER_BLOCK_HEAVY_RESOURCES` | `1` | Block heavy page resources for speed |
-
-## Troubleshooting
-
-- **`BrowserType.launch_persistent_context: Target ... closed` / "profile is already in use"**
-  — another Chromium (usually the `auth` window) still holds the profile. Close it and retry.
-- **`deepseek-local-server is not initialized`** (from `ask_deepseek`) — run `init`.
-- **`Could not reach deepseek-local-server at http://127.0.0.1:9874`** (from `ask_deepseek`)
-  — start `serve` in a separate terminal.
-- **Timed out after ~300 s** — normal for long DeepThink answers; raise
-  `DEEPSEEK_LOCAL_SERVER_TIMEOUT_SECONDS` or pass a larger `timeout_seconds` to `ask_deepseek`.
-- **Login expired / page changed** — re-run `auth` and log in again.
-
-## Project layout
-
+```powershell
+$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="0"
 ```
-src/deepseek_local_server/
-  cli.py            # init / auth / serve / doctor / chat / mcp
-  config.py         # Settings from env, validation, paths
-  auth.py           # local API token
-  service.py        # request queue + browser worker orchestration
-  browser/          # Playwright manager, DOM selectors, worker (send/poll/parse)
-  api/              # FastAPI app: /health, /v1/models, /v1/chat/completions
-  openai/           # OpenAI schema/content helpers
-  mcp_server.py     # ask_deepseek stdio MCP wrapper
-tests/              # 26 unit tests (config, dom, content, chat mode, tool protocol, MCP server, browser manager)
+
+Force old browser-only behavior:
+
+```powershell
+$env:DEEPSEEK_LOCAL_SERVER_DIRECT="0"
+$env:DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK="1"
 ```
+
+## Diagnostics
+
+```powershell
+# validate files only
+.\.venv\Scripts\deepseek-local-server.exe doctor --offline
+
+# validate auth + call DeepSeek PoW challenge endpoint
+.\.venv\Scripts\deepseek-local-server.exe doctor
+```
+
+Useful API endpoints:
+
+```text
+GET  /health
+GET  /v1/models
+GET  /v1/model-capabilities
+GET  /v1/sessions
+POST /v1/sessions/reset?agent=<id|all>
+POST /v1/chat/completions
+POST /v1/messages
+POST /v1/responses
+```
+
+## Environment variables
+
+| Variable | Default |
+|---|---|
+| `DEEPSEEK_LOCAL_SERVER_HOST` | `127.0.0.1` |
+| `DEEPSEEK_LOCAL_SERVER_PORT` | `9874` |
+| `DEEPSEEK_LOCAL_SERVER_DIRECT` | `1` |
+| `DEEPSEEK_LOCAL_SERVER_BROWSER_FALLBACK` | `1` |
+| `DEEPSEEK_LOCAL_SERVER_HEADLESS` | `1` |
+| `DEEPSEEK_LOCAL_SERVER_TIMEOUT_SECONDS` | `300` |
+| `DEEPSEEK_LOCAL_SERVER_FETCH_TIMEOUT_SECONDS` | `60` |
+| `DEEPSEEK_LOCAL_SERVER_SESSION_TTL_SECONDS` | `7200` |
+| `DEEPSEEK_LOCAL_SERVER_MAX_SESSION_MESSAGES` | `100` |
+| `DEEPSEEK_LOCAL_SERVER_MAX_CONCURRENT_DIRECT` | `8` |
+| `DEEPSEEK_LOCAL_SERVER_MAX_PROMPT_CHARS` | `200000` |
+
+## Attribution
+
+The direct Web API implementation was informed by the MIT-licensed `ForgetMeAI/FreeDeepseekAPI` project. See `THIRD_PARTY_NOTICES.md`.
+
+## Important limitations
+
+This is an experimental adapter for DeepSeek Web, not the official DeepSeek API. Internal endpoints, PoW WASM exports, request headers, stream patches or UI selectors can change without notice.
+
+The direct backend is isolated under `direct/` specifically so those changes do not spread through the OpenAI/MCP layers.
+
+The implementation does not bypass CAPTCHA, 2FA or login challenges. Re-run `auth` and complete those checks normally in the browser.

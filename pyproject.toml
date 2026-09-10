@@ -1,28 +1,26 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "deepseek-local-server"
-version = "0.1.0"
-description = "OpenAI-compatible local server backed by DeepSeek Web through Playwright"
+version = "0.2.0"
+description = "Hybrid DeepSeek Web gateway: direct Web API first, Playwright fallback, OpenAI API and MCP"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
 authors = [{ name = "DeepSeek Local Server contributors" }]
 dependencies = [
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.32,<1",
-  "playwright>=1.49,<2",
-  "pydantic>=2.10,<3",
   "httpx>=0.28,<1",
+  "pydantic>=2.10,<3",
+  "playwright>=1.49,<2",
+  "wasmtime>=48,<49",
   "mcp>=2,<3",
 ]
 
 [project.optional-dependencies]
-dev = [
-  "pytest>=8.3,<10",
-]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.25,<2"]
 
 [project.scripts]
 deepseek-local-server = "deepseek_local_server.cli:main"
@@ -34,3 +32,7 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.setuptools.package-data]
+deepseek_local_server = ["THIRD_PARTY_NOTICES.md"]

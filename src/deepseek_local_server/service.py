@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import AsyncIterator
 from uuid import uuid4
 
-from playwright.async_api import Page
-
-from deepseek_local_server.browser.manager import BrowserManager
-from deepseek_local_server.browser.worker import DeepSeekBrowserWorker
+from deepseek_local_server.browser.fallback import BrowserFallback
 from deepseek_local_server.config import Settings
-from deepseek_local_server.errors import ToolProtocolError
-from deepseek_local_server.openai.prompt import build_prompt
+from deepseek_local_server.direct.client import DeepSeekDirectClient
+from deepseek_local_server.models import ModelSpec, resolve_model
+from deepseek_local_server.openai.prompt import build_prompt, extract_images
 from deepseek_local_server.openai.responses import Usage, estimate_tokens
 from deepseek_local_server.openai.schemas import ChatCompletionRequest, ChatMessage
-from deepseek_local_server.openai.tool_protocol import ParsedAssistantOutput, parse_assistant_output
+from deepseek_local_server.openai.tool_protocol import ParsedOutput, parse_output
+from deepseek_local_server.session import AgentSession, SessionStore
 
 LOGGER = logging.getLogger("deepseek_local_server.service")
 
@@ -25,154 +24,208 @@ LOGGER = logging.getLogger("deepseek_local_server.service")
 class CompletionResult:
     completion_id: str
     model: str
-    parsed: ParsedAssistantOutput
+    parsed: ParsedOutput
+    reasoning: str
     usage: Usage
     duration_ms: int
-    browser_url: str
-    partial: bool
+    backend: str
 
 
 class CompletionService:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        direct: DeepSeekDirectClient | None = None,
+        browser: BrowserFallback | None = None,
+    ) -> None:
         self.settings = settings
-        self.manager = BrowserManager(settings)
-        self.worker = DeepSeekBrowserWorker(settings, self.manager)
-        self._lock = asyncio.Lock()
+        self.direct = direct or DeepSeekDirectClient(settings)
+        self.browser = browser or BrowserFallback(settings)
+        self.sessions = SessionStore()
         self.request_count = 0
         self.last_request_id: str | None = None
         self.last_request_at: str | None = None
-        self.last_stage = "idle"
+        self.last_backend: str | None = None
         self.last_error: str | None = None
-        self._session_page: Page | None = None
-        self._session_messages: list[ChatMessage] | None = None
-
-    @property
-    def busy(self) -> bool:
-        return self._lock.locked()
-
-    def _set_stage(self, request_id: str, stage: str) -> None:
-        self.last_request_id = request_id
-        self.last_stage = stage
-        LOGGER.info("[%s] stage=%s", request_id, stage)
 
     def runtime_status(self) -> dict[str, object]:
         return {
             "request_count": self.request_count,
             "last_request_id": self.last_request_id,
             "last_request_at": self.last_request_at,
-            "last_stage": self.last_stage,
+            "last_backend": self.last_backend,
             "last_error": self.last_error,
-            "session_active": self._session_page is not None and not self._session_page.is_closed(),
+            "direct_enabled": self.settings.direct_enabled,
+            "browser_fallback_enabled": self.settings.browser_fallback_enabled,
         }
 
-    def _continuation_delta(self, messages: list[ChatMessage]) -> list[ChatMessage] | None:
-        """Return the new trailing messages if `messages` extends the last session, else None."""
-        prev = self._session_messages
-        if prev is None or self._session_page is None or self._session_page.is_closed():
-            return None
-        if len(messages) <= len(prev) or messages[: len(prev)] != prev:
-            return None
-        return messages[len(prev):]
-
-    async def _close_session(self) -> None:
-        page, self._session_page = self._session_page, None
-        self._session_messages = None
-        if page is not None:
-            try:
-                await page.close()
-            except Exception:
-                pass
-
-    async def complete(self, request: ChatCompletionRequest) -> CompletionResult:
+    def _begin(self) -> str:
         request_id = uuid4().hex
         self.request_count += 1
         self.last_request_id = request_id
         self.last_request_at = datetime.now(UTC).isoformat()
         self.last_error = None
-        self._set_stage(request_id, "received")
-        LOGGER.info(
-            "[%s] completion received: model=%s stream=%s messages=%d tools=%d",
-            request_id,
-            request.model,
-            request.stream,
-            len(request.messages),
-            len(request.tools or []),
+        return request_id
+
+    def _prompt_for_locked_session(
+        self, request: ChatCompletionRequest, session: AgentSession
+    ) -> tuple[str, list[ChatMessage]]:
+        delta = session.continuation_delta(request.messages)
+        if delta is None:
+            # A new/replaced history must not continue an unrelated remote chain.
+            session.remote.reset()
+            messages_used = list(request.messages)
+        else:
+            messages_used = delta
+        prompt = build_prompt(request, messages=messages_used)
+        if len(prompt) > self.settings.max_prompt_chars:
+            raise ValueError(f"Serialized prompt has {len(prompt)} chars; limit is {self.settings.max_prompt_chars}")
+        return prompt, messages_used
+
+    async def _upload_images(self, messages: list[ChatMessage], spec: ModelSpec) -> list[str]:
+        file_ids = []
+        for image in extract_images(messages):
+            file_ids.append(await self.direct.upload_image(image.data, image.filename, image.content_type, spec))
+        return file_ids
+
+    async def complete(self, request: ChatCompletionRequest, session_key: str) -> CompletionResult:
+        request_id = self._begin()
+        started = time.perf_counter()
+        spec = resolve_model(request.model)
+        session = await self.sessions.get(session_key)
+        allowed = {tool.function.name for tool in request.tools or []}
+        content = ""
+        reasoning = ""
+        backend = "direct"
+
+        async with session.lock:
+            prompt, messages_used = self._prompt_for_locked_session(request, session)
+            fresh_prompt = build_prompt(request)
+            if self.settings.direct_enabled:
+                try:
+                    file_ids = await self._upload_images(messages_used, spec)
+                    async for piece in self.direct.stream(
+                        prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
+                    ):
+                        if piece.kind == "reasoning":
+                            reasoning += piece.text
+                        else:
+                            content += piece.text
+                    session.last_messages = list(request.messages)
+                    self.last_backend = "direct"
+                except Exception as exc:
+                    LOGGER.warning("[%s] direct backend failed: %s", request_id, exc, exc_info=True)
+                    if not self.settings.browser_fallback_enabled:
+                        self.last_error = f"{type(exc).__name__}: {exc}"
+                        raise
+                    backend = "browser-fallback"
+                    answer = await self.browser.query(build_prompt(request), spec)
+                    content = answer.content
+                    reasoning = ""
+                    # Browser UI state is independent from the direct remote chain.
+                    session.reset()
+                    self.last_backend = backend
+            else:
+                if not self.settings.browser_fallback_enabled:
+                    raise RuntimeError("Both direct and browser backends are disabled")
+                backend = "browser-fallback"
+                answer = await self.browser.query(build_prompt(request), spec)
+                content = answer.content
+                session.reset()
+                self.last_backend = backend
+
+        parsed = parse_output(content, allowed)
+        usage = Usage(
+            prompt_tokens=estimate_tokens(prompt),
+            completion_tokens=estimate_tokens(parsed.content or content),
+            reasoning_tokens=estimate_tokens(reasoning),
+        )
+        return CompletionResult(
+            completion_id=f"chatcmpl-{request_id}",
+            model=request.model,
+            parsed=parsed,
+            reasoning=reasoning,
+            usage=usage,
+            duration_ms=int((time.perf_counter() - started) * 1000),
+            backend=backend,
         )
 
-        try:
-            if request.model != self.settings.model_id:
-                raise ValueError(f"Unknown model {request.model!r}; expected {self.settings.model_id!r}")
+    async def stream(self, request: ChatCompletionRequest, session_key: str) -> AsyncIterator[dict]:
+        """Yield OpenAI delta payloads as DeepSeek Web produces them.
 
-            allowed_tools = {tool.function.name for tool in request.tools or []}
-            started = time.perf_counter()
-            self._set_stage(request_id, "queued")
-            async with self._lock:
-                self._set_stage(request_id, "browser")
+        Requests with tools are intentionally buffered so textual tool markup cannot leak
+        before it is converted into OpenAI tool_calls.
+        """
+        if request.tools:
+            result = await self.complete(request, session_key)
+            if result.reasoning:
+                yield {"delta": {"reasoning_content": result.reasoning}, "finish_reason": None, "backend": result.backend}
+            if result.parsed.tool_calls:
+                yield {
+                    "delta": {"role": "assistant", "content": None, "tool_calls": result.parsed.tool_calls},
+                    "finish_reason": None,
+                    "backend": result.backend,
+                }
+                yield {"delta": {}, "finish_reason": "tool_calls", "backend": result.backend, "usage": result.usage}
+            else:
+                if result.parsed.content:
+                    yield {"delta": {"content": result.parsed.content}, "finish_reason": None, "backend": result.backend}
+                yield {"delta": {}, "finish_reason": "stop", "backend": result.backend, "usage": result.usage}
+            return
 
-                delta = self._continuation_delta(request.messages)
-                if delta is None and self._session_page is not None:
-                    await self._close_session()
+        request_id = self._begin()
+        spec = resolve_model(request.model)
+        session = await self.sessions.get(session_key)
+        emitted_any = False
+        content = ""
+        reasoning = ""
+        backend = "direct"
 
-                if delta is not None:
-                    prompt = build_prompt(
-                        request,
-                        messages=delta,
-                        start_index=len(request.messages) - len(delta),
-                        continuation=True,
-                    )
-                    page_arg = self._session_page
-                else:
-                    prompt = build_prompt(request)
-                    page_arg = None
+        async with session.lock:
+            prompt, messages_used = self._prompt_for_locked_session(request, session)
+            fresh_prompt = build_prompt(request)
+            if self.settings.direct_enabled:
+                try:
+                    file_ids = await self._upload_images(messages_used, spec)
+                    async for piece in self.direct.stream(
+                        prompt, spec, session.remote, fresh_prompt=fresh_prompt, ref_file_ids=file_ids
+                    ):
+                        emitted_any = True
+                        if piece.kind == "reasoning":
+                            reasoning += piece.text
+                            yield {"delta": {"reasoning_content": piece.text}, "finish_reason": None, "backend": "direct"}
+                        else:
+                            content += piece.text
+                            yield {"delta": {"content": piece.text}, "finish_reason": None, "backend": "direct"}
+                    session.last_messages = list(request.messages)
+                    self.last_backend = "direct"
+                except Exception as exc:
+                    LOGGER.warning("[%s] direct stream failed: %s", request_id, exc, exc_info=True)
+                    if emitted_any or not self.settings.browser_fallback_enabled:
+                        self.last_error = f"{type(exc).__name__}: {exc}"
+                        raise
+                    backend = "browser-fallback"
+                    answer = await self.browser.query(build_prompt(request), spec)
+                    content = answer.content
+                    session.reset()
+                    self.last_backend = backend
+                    yield {"delta": {"content": content}, "finish_reason": None, "backend": backend}
+            else:
+                if not self.settings.browser_fallback_enabled:
+                    raise RuntimeError("Both direct and browser backends are disabled")
+                backend = "browser-fallback"
+                answer = await self.browser.query(build_prompt(request), spec)
+                content = answer.content
+                session.reset()
+                self.last_backend = backend
+                yield {"delta": {"content": content}, "finish_reason": None, "backend": backend}
 
-                LOGGER.info(
-                    "[%s] serialized prompt characters=%d continuation=%s",
-                    request_id, len(prompt), delta is not None,
-                )
-                if len(prompt) > self.settings.max_prompt_chars:
-                    raise ValueError(
-                        f"Serialized prompt has {len(prompt)} characters; limit is {self.settings.max_prompt_chars}"
-                    )
-
-                browser_result, session_page = await self.worker.query(
-                    request_id=request_id,
-                    prompt=prompt,
-                    timeout_seconds=self.settings.request_timeout_seconds,
-                    progress=lambda stage: self._set_stage(request_id, stage),
-                    page=page_arg,
-                    keep_open=True,
-                    mode=request.mode,
-                )
-                self._session_page = session_page
-                self._session_messages = list(request.messages)
-
-            self._set_stage(request_id, "parsing_response")
-            try:
-                parsed = parse_assistant_output(browser_result.answer, allowed_tools)
-            except ToolProtocolError:
-                raise
-
-            duration_ms = int((time.perf_counter() - started) * 1000)
-            usage = Usage(
-                prompt_tokens=estimate_tokens(prompt),
-                completion_tokens=estimate_tokens(browser_result.answer),
-            )
-            self._set_stage(request_id, "completed")
-            LOGGER.info("[%s] completion finished in %d ms", request_id, duration_ms)
-            return CompletionResult(
-                completion_id=f"chatcmpl-{request_id}",
-                model=request.model,
-                parsed=parsed,
-                usage=usage,
-                duration_ms=duration_ms,
-                browser_url=browser_result.browser_url,
-                partial=browser_result.partial,
-            )
-        except Exception as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
-            self._set_stage(request_id, "failed")
-            LOGGER.exception("[%s] completion failed", request_id)
-            raise
+        usage = Usage(
+            prompt_tokens=estimate_tokens(prompt),
+            completion_tokens=estimate_tokens(content),
+            reasoning_tokens=estimate_tokens(reasoning),
+        )
+        yield {"delta": {}, "finish_reason": "stop", "backend": backend, "usage": usage}
 
     async def close(self) -> None:
-        await self.manager.close()
+        await self.browser.close()
