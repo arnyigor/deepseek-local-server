@@ -319,6 +319,32 @@ def test_inline_math_is_cleaned_but_prices_are_not(bridge):
     asyncio.run(run())
 
 
+def test_markdown_fenced_answer_is_unwrapped_and_rendered(bridge):
+    requests, replies, ctx = bridge
+    answer = "\n".join(
+        [
+            "```markdown",
+            "| a | b |",
+            "|---|---|",
+            "| 1 | 2 |",
+            "",
+            "```python",
+            "x = 1  # **raw**",
+            "```",
+            "```",
+        ]
+    )
+    replies.append({"deltas": [{"content": answer}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert "```markdown" not in result
+        assert result.startswith("┌")  # the wrapped table was rendered
+        assert "```python" in result and "x = 1  # **raw**" in result  # nested code untouched
+
+    asyncio.run(run())
+
+
 def test_pipe_lines_that_are_not_a_table_stay_untouched(bridge):
     requests, replies, ctx = bridge
     replies.append({"deltas": [{"content": "| not a table\nsecond line"}]})

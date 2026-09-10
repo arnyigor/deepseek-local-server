@@ -356,32 +356,53 @@ def _render_markdown(text: str) -> str:
     """Make an answer readable in hosts that print tool results as literal text.
 
     Markdown tables become box-drawing tables (a raw pipe table wraps and loses
-    its columns), heading/bold/link markers are dropped, fenced code and math
-    bodies are left exactly as they are.
+    its columns), heading/bold/link markers are dropped, and math is rendered.
+    Fenced code is left exactly as-is — except a ```markdown fence, which is the
+    model wrapping its own answer and should be unwrapped and rendered.
     """
     lines = text.split("\n")
     out: list[str] = []
     index = 0
-    in_fence = False
+    in_code = False
+    in_md_fence = False
     in_math = False
     while index < len(lines):
         raw = lines[index]
         stripped = raw.strip()
-        if not in_math and (stripped.startswith("```") or stripped.startswith("~~~")):
-            in_fence = not in_fence
+        is_fence = stripped.startswith("```") or stripped.startswith("~~~")
+        if not in_math and not in_code and is_fence:
+            language = stripped.lstrip("`~").strip().lower()
+            if in_md_fence and not language:
+                in_md_fence = False
+                index += 1  # bare fence closes the markdown wrapper
+                continue
+            if language in {"markdown", "md"} and not in_md_fence:
+                in_md_fence = True
+                index += 1  # drop the opening marker, keep rendering the body
+                continue
+            in_code = True
             out.append(raw)
             index += 1
             continue
-        if not in_fence and stripped in {"$$", "\\["}:
+        if in_code and is_fence:
+            in_code = False
+            out.append(raw)
+            index += 1
+            continue
+        if not in_code and stripped in {"$$", "\\["}:
             in_math = True
             index += 1
             continue
-        if not in_fence and stripped in {"$$", "\\]"} and in_math:
+        if not in_code and stripped in {"$$", "\\]"} and in_math:
             in_math = False
             index += 1
             continue
-        if in_fence or in_math:
-            out.append(raw if in_fence else _render_math(raw))
+        if in_code:
+            out.append(raw)
+            index += 1
+            continue
+        if in_math:
+            out.append(_render_math(raw))
             index += 1
             continue
         if stripped.startswith("|"):
