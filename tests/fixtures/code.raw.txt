@@ -1,0 +1,12 @@
+```python
+import math
+
+dv = lambda Isp, m0, mf: Isp * 9.80665 * math.log(m0 / mf)
+
+print(f"Δv = {dv(350, 50000, 8000):.1f} м/с")
+```
+
+Вывод:
+```
+Δv = 6282.6 м/с
+```

@@ -276,6 +276,17 @@ LATEX_SYMBOLS = {
     "rightarrow": "→",
     "leftarrow": "←",
     "circ": "∘",
+    "oplus": "⊕",
+    "ominus": "⊖",
+    "otimes": "⊗",
+    "equiv": "≡",
+    "propto": "∝",
+    "sim": "∼",
+    "angle": "∠",
+    "cdots": "⋯",
+    "ldots": "…",
+    "prime": "′",
+    "degree": "°",
     "ln": "ln",
     "log": "log",
     "lg": "lg",
@@ -291,6 +302,8 @@ LATEX_SYMBOLS = {
 }
 SUPERSCRIPT = str.maketrans("0123456789+-n", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻ⁿ")
 SUBSCRIPT = str.maketrans("0123456789+-aehijklmnoprstuvx", "₀₁₂₃₄₅₆₇₈₉₊₋ₐₑₕᵢⱼₖₗₘₙₒₚᵣₛₜᵤᵥₓ")
+# accents combine with the base letter: \dot{m} -> ṁ
+COMBINING = {"dot": "\u0307", "ddot": "\u0308", "bar": "\u0304", "hat": "\u0302", "tilde": "\u0303", "vec": "\u20d7"}
 # only known commands are substituted, longest name first: \ln must still match in "\lnm"
 _LATEX_COMMAND_RE = re.compile("\\\\(" + "|".join(sorted(map(re.escape, LATEX_SYMBOLS), key=len, reverse=True)) + ")")
 
@@ -314,19 +327,21 @@ def _is_scriptable(body: str, table: dict[int, str]) -> bool:
 
 def _render_math(text: str) -> str:
     """Turn common LaTeX into readable Unicode; unknown commands are kept verbatim."""
+    for accent, mark in COMBINING.items():
+        text = re.sub(rf"\\{accent}\s*\{{([^{{}}]*)\}}", lambda m, mark=mark: f"{m.group(1)}{mark}", text)
     for _ in range(4):  # innermost fractions first, one level of nested braces allowed
         # a fraction glued to a function name keeps the grouping: \ln\frac{a}{b} -> ln(a/b)
         text = re.sub(
-            r"(?<=[A-Za-z0-9)])\\frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+            r"(?<=[A-Za-z0-9)])\\(?:d|t|c)?frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
             r"(\1/\2)",
             text,
         )
         text = re.sub(
-            r"\\frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
+            r"\\(?:d|t|c)?frac\s*\{((?:[^{}]|\{[^{}]*\})*)\}\s*\{((?:[^{}]|\{[^{}]*\})*)\}",
             r"\1/\2",
             text,
         )
-    text = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"√(\1)", text)
+    text = re.sub(r"\\sqrt\s*\{((?:[^{}]|\{[^{}]*\})*)\}", r"√(\1)", text)
     text = re.sub(r"\\(?:text|mathrm|operatorname)\s*\{([^{}]*)\}", r"\1", text)
     text = re.sub(r"\\(?:left|right|displaystyle)\s*", "", text)
     text = text.replace("{,}", ",").replace("\\,", " ").replace("\\;", " ").replace("\\!", "")
@@ -336,9 +351,9 @@ def _render_math(text: str) -> str:
     text = re.sub(r"\\\s", " ", text)  # \ followed by whitespace is a plain space
     text = re.sub(r"\^\{([^{}]*)\}", lambda m: _superscript(m.group(1)), text)
     text = re.sub(r"_\{([^{}]*)\}", lambda m: _script(m.group(1), SUBSCRIPT), text)
-    text = re.sub(r"\^([0-9n])", lambda m: _superscript(m.group(1)), text)
+    text = re.sub(r"\^([0-9]+)(?![0-9])", lambda m: _superscript(m.group(1)), text)
     text = re.sub(
-        r"(?<=[A-Za-z0-9)])([_^])([0-9a-z])\b",
+        r"(?<=[A-Za-z0-9)])([_^])([0-9a-z])(?![A-Za-z0-9])",
         lambda m: _script(m.group(2), SUBSCRIPT)
         if m.group(1) == "_"
         else _superscript(m.group(2)),
@@ -413,11 +428,29 @@ def _latex_body_to_markdown(lines: list[str]) -> list[str]:
         "",
         text,
     )
+    text = re.sub(r"\\section\*?\s*\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"\\(?:caption|ref|cite|eqref)\s*\{([^{}]*)\}", r"\1", text)
+    text = re.sub(r"^\s*\[[htbp!]{1,4}\]\s*$", "", text, flags=re.MULTILINE)  # float placement
     text = re.sub(r"\\(?:textbf|textit|emph|mathrm|text)\s*\{([^{}]*)\}", r"\1", text)
     text = re.sub(r"\\SI\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1 \2", text)
     text = re.sub(r"\\si\s*\{([^{}]*)\}", r"\1", text)
     text = re.sub(r"\\(?:left|right)?\{([^{}]*)\}", r"\1", text)  # grouping braces in cells
-    return [line.rstrip() for line in text.split("\n")]
+    return _join_unbalanced_braces(text)
+
+
+def _join_unbalanced_braces(text: str) -> list[str]:
+    """Models write multi-line fractions/sqrt; glue lines until their braces close."""
+    merged: list[str] = []
+    buffer = ""
+    for line in text.split("\n"):
+        buffer = f"{buffer} {line.strip()}".strip() if buffer else line.strip()
+        if buffer.count("{") > buffer.count("}"):
+            continue
+        merged.append(buffer)
+        buffer = ""
+    if buffer:
+        merged.append(buffer)
+    return [line.rstrip() for line in merged]
 
 
 RENDERABLE_FENCE_LANGUAGES = {"markdown", "md", "latex", "tex"}

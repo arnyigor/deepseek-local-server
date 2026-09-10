@@ -1,0 +1,85 @@
+Ниже — готовый LaTeX-документ с расчётом и таблицей.
+
+```latex
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+\usepackage[russian]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{Первая космическая скорость для Земли и Луны}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Формула}
+
+Первая космическая скорость — минимальная скорость кругового движения у поверхности небесного тела.  
+Условие движения по круговой орбите радиуса \(R\):
+
+\[
+\frac{GMm}{R^2}=\frac{mv_1^2}{R}.
+\]
+
+Отсюда:
+
+\[
+v_1=\sqrt{\frac{GM}{R}}=\sqrt{gR},
+\qquad
+g=\frac{GM}{R^2}.
+\]
+
+Здесь \(G=6{,}67430\cdot10^{-11}\ \text{м}^3/(\text{кг}\cdot\text{с}^2)\).
+
+\section{Расчёт}
+
+Для Земли:
+
+\[
+v_{1,\oplus}
+=
+\sqrt{
+\frac{(6{,}67430\cdot10^{-11})(5{,}9722\cdot10^{24})}
+{6{,}371\cdot10^6}
+}
+\approx 7{,}91\cdot10^3\ \text{м/с}
+=
+7{,}91\ \text{км/с}.
+\]
+
+Для Луны:
+
+\[
+v_{1,\text{Л}}
+=
+\sqrt{
+\frac{(6{,}67430\cdot10^{-11})(7{,}342\cdot10^{22})}
+{1{,}7374\cdot10^6}
+}
+\approx 1{,}68\cdot10^3\ \text{м/с}
+=
+1{,}68\ \text{км/с}.
+\]
+
+\section{Таблица значений}
+
+\begin{table}[h]
+\centering
+\caption{Исходные данные и первые космические скорости}
+\begin{tabular}{lcccc}
+\toprule
+Тело & \(M\), кг & \(R\), км & \(v_1\), м/с & \(v_1\), км/с \\
+\midrule
+Земля & \(5{,}9722\cdot10^{24}\) & \(6371\) & \(7910\) & \(7{,}91\) \\
+Луна  & \(7{,}342\cdot10^{22}\)  & \(1737{,}4\) & \(1680\) & \(1{,}68\) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
+```

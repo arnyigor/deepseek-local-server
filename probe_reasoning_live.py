@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # Cyrillic output on cp1251 consoles
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from deepseek_local_server import mcp_server  # noqa: E402
@@ -46,15 +47,17 @@ async def main():
 
     first_tick_before_end = bool(ctx.ticks) and ctx.ticks[0][0] < total - 0.5
     mid_call_ticks = [t for t, _ in ctx.ticks if t < total - 0.5]
-    has_block = "\x1b[90m<reasoning>" in result and result.rstrip().endswith(("</reasoning>", result.split("\n")[-1]))
-    answer_tail = result.split("\n")[-1]
+    answer_body = result.strip()
 
     checks = {
         "several ticks during thinking": len(mid_call_ticks) >= 1,
         "first tick well before the call ended": first_tick_before_end,
-        "result still carries the full reasoning block": "\x1b[90m<reasoning>" in result,
-        "answer follows the block": "план" in result or "₽" in result or answer_tail.strip() != "",
-        "ticks look like a ticker": all(m.startswith("thinking:") for _, m in ctx.ticks) and has_block,
+        "reasoning stayed out of the result": "<reasoning>" not in result and "\x1b[" not in result,
+        "result is the answer": len(answer_body) > 0,
+        "ticks are compact single lines": all(
+            m.startswith("thinking: ") and "\n" not in m and len(m) <= mcp_server.NOTIFY_TAIL_CHARS + 32
+            for _, m in ctx.ticks
+        ),
     }
     for name, ok in checks.items():
         print(f"  {'PASS' if ok else 'FAIL'}  {name}")
