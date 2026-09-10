@@ -139,7 +139,11 @@ ask_deepseek(
 
 Reasoning and web search are always on (`deepseek-reasoner-search`) and the full reasoning chain is always returned — there are no toggles.
 
-Reasoning behavior: the tool returns the answer first, then the complete reasoning chain in one `<reasoning>...</reasoning>` block, and pushes that same chain once as a progress notification the moment thinking ends — so clients that surface progress (e.g. the pi proxy path) show it before the answer arrives. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+Reasoning behavior: routing is automatic. If the caller sent a progress token (pi's proxy path does), the complete reasoning is pushed once as a progress notification the moment thinking ends — before the answer — and the result stays the bare answer. Callers without that channel (pi's direct-tools path) get the reasoning appended to the result instead: `answer\n\n---\n<reasoning>...</reasoning>`. Session history stores the clean answer only. Conversation history is kept process-wide and survives across calls; `new_conversation=true` resets it.
+
+## Rendering in pi
+
+Every line of tool output is painted with the theme's `toolOutput` color (`gray` in the shipped dark theme), so an MCP answer looks gray next to white assistant messages. To make it white, copy `dark.json` from the pi install into `<agent-dir>/themes/`, set `colors.toolOutput` to `text`, and pick that theme with `/theme`.
 
 ## Diagnostics
 

@@ -35,6 +35,22 @@ server = MCPServer(
 MODEL = "deepseek-reasoner-search"  # reasoning + web search are always on
 
 
+def _client_gets_progress(ctx: Context) -> bool:
+    """True when the caller sent a progressToken, i.e. notifications are delivered.
+
+    pi's proxy path sets it (progress lands in the UI); the direct-tools path
+    does not, so reasoning has to travel inside the tool result instead.
+    """
+    try:
+        meta = ctx.request_context.meta
+    except Exception:
+        return False
+    if not isinstance(meta, dict):
+        return False
+    # the framework normalises _meta.progressToken into meta["progress_token"]
+    return bool(meta.get("progress_token") or meta.get("progressToken"))
+
+
 def _build_content(question: str, image_path: str | None) -> str | list[dict[str, object]]:
     if not image_path:
         return question
@@ -59,13 +75,12 @@ async def ask_deepseek(
 ) -> str:
     """Ask DeepSeek Web through the local gateway.
 
-    Reasoning and web search are always on. The returned text is the answer first,
-    followed by the complete reasoning chain in one block:
-    answer + <reasoning>...</reasoning>.
+    Reasoning and web search are always on.
 
-    Because MCP tool results are delivered atomically, the complete reasoning is
-    also pushed once as a progress notification the moment the thinking phase
-    ends, so clients that surface progress show it before the answer.
+    When the caller supports progress notifications, the complete reasoning is
+    pushed once the moment the thinking phase ends (so it shows up before the
+    answer) and the result stays the bare answer. Callers without that channel
+    get the reasoning appended to the result instead: answer + <reasoning>.
     """
     async with _lock:
         if new_conversation:
@@ -85,11 +100,12 @@ async def ask_deepseek(
         tool_markup: list[str] = []
         error_text: str | None = None
         notified = False
+        progress_delivered = _client_gets_progress(ctx)
 
         async def _notify_reasoning() -> None:
             """Push the complete reasoning once, as the thinking phase ends."""
             nonlocal notified
-            if notified or not reasoning_acc:
+            if notified or not reasoning_acc or not progress_delivered:
                 return
             notified = True
             try:
@@ -160,7 +176,8 @@ async def ask_deepseek(
             _history.extend([user, {"role": "assistant", "content": answer}])
         answer = answer or "(DeepSeek returned an empty response)"
         reasoning_text = "".join(reasoning_acc)
-        if reasoning_text:
+        if reasoning_text and not progress_delivered:
+            # No notification channel: keep the chain in the result for the caller.
             return f"{answer}\n\n---\n<reasoning>\n{reasoning_text}\n</reasoning>"
         return answer
 

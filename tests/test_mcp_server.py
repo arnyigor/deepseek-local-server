@@ -56,7 +56,10 @@ def bridge(monkeypatch):
     monkeypatch.setattr(mcp_server, "read_api_token", lambda _: "test-token")
     monkeypatch.setattr(mcp_server, "_history", [])
     monkeypatch.setattr(mcp_server, "_lock", asyncio.Lock())
-    return requests, replies, AsyncMock()
+    ctx = AsyncMock()
+    # no progressToken -> the caller cannot receive progress notifications
+    ctx.request_context.meta = None
+    return requests, replies, ctx
 
 
 def test_continuation_and_explicit_reset(bridge):
@@ -160,6 +163,21 @@ def test_answer_comes_first_and_reasoning_is_appended(bridge):
     asyncio.run(run())
     # history stores the clean answer, not the reasoning wrapper
     assert requests[1]["messages"][1] == {"role": "assistant", "content": "the answer"}
+
+
+def test_progress_capable_caller_gets_reasoning_once_and_a_bare_answer(bridge):
+    requests, replies, ctx = bridge
+    ctx.request_context.meta = {"progress_token": 7}
+    replies.append({"deltas": [{"reasoning_content": "think"}, {"content": "the answer"}]})
+
+    async def run():
+        result = await mcp_server.ask_deepseek("question", ctx)
+        assert result == "the answer"  # reasoning travelled by notification only
+        assert ctx.report_progress.await_count == 1
+        assert ctx.report_progress.await_args.kwargs["message"] == "think"
+        assert ctx.report_progress.await_args.kwargs["progress"] == 5.0
+
+    asyncio.run(run())
 
 
 def test_cancellation_stops_request_without_updating_history(monkeypatch):
